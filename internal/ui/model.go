@@ -58,7 +58,7 @@ func New(client *api.Client, theme string) *Model {
 	applyTheme(theme)
 
 	ta := textarea.New()
-	ta.Placeholder = "What's on your mind? (Ctrl+S to post, Esc to cancel)"
+	ta.Placeholder = "What's on your mind? (Ctrl+Enter to post, Esc to cancel)"
 	ta.CharLimit = 300
 	ta.SetWidth(60)
 	ta.SetHeight(5)
@@ -199,7 +199,7 @@ func (m *Model) updateCompose(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = stateTimeline
 			m.composeErr = ""
 			return m, nil
-		case "ctrl+s":
+		case "ctrl+enter":
 			text := strings.TrimSpace(m.compose.Value())
 			if text == "" {
 				m.composeErr = "Post cannot be empty"
@@ -223,11 +223,12 @@ func (m *Model) View() string {
 
 	header := m.renderTabs()
 	footer := m.renderStatusBar()
-	contentHeight := m.height - lipgloss.Height(header) - lipgloss.Height(footer)
+	help := m.renderHelpBar()
+	contentHeight := m.height - lipgloss.Height(header) - lipgloss.Height(footer) - lipgloss.Height(help)
 
 	timeline := m.renderTimeline(contentHeight)
 
-	base := lipgloss.JoinVertical(lipgloss.Left, header, timeline, footer)
+	base := lipgloss.JoinVertical(lipgloss.Left, header, timeline, help, footer)
 
 	if m.state == stateCompose {
 		return m.renderOverlay(base)
@@ -326,6 +327,11 @@ func (m *Model) renderTimeline(height int) string {
 	return strings.Join(lines, "\n")
 }
 
+func (m *Model) renderHelpBar() string {
+	keys := "j/k: scroll  h/l: tab  c: post  r: refresh  q: quit"
+	return handleStyle.Width(m.width).Render(keys)
+}
+
 func (m *Model) renderStatusBar() string {
 	var msg string
 	if m.statusMsg != "" {
@@ -334,8 +340,6 @@ func (m *Model) renderStatusBar() string {
 		} else {
 			msg = m.statusMsg
 		}
-	} else {
-		msg = "j/k: scroll  h/l: tab  c: post  r: refresh  q: quit"
 	}
 	return statusBarStyle.Width(m.width).Render(msg)
 }
@@ -361,7 +365,7 @@ func (m *Model) renderOverlay(base string) string {
 		errLine = "\n" + errorStyle.Render(m.composeErr)
 	}
 
-	help := handleStyle.Render("Ctrl+S: post  Esc: cancel")
+	help := handleStyle.Render("Ctrl+Enter: post  Esc: cancel")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		composeTitleStyle.Render("New Post"),
