@@ -28,9 +28,10 @@ const (
 )
 
 type fetchedMsg struct {
-	tab   tab
-	items []api.FeedItem
-	err   error
+	tab    tab
+	items  []api.FeedItem
+	cursor string
+	err    error
 }
 
 type postSentMsg struct {
@@ -54,6 +55,13 @@ type bookmarkMsg struct {
 	bookmarked bool
 }
 
+type appendedMsg struct {
+	tab    tab
+	items  []api.FeedItem
+	cursor string
+	err    error
+}
+
 type Model struct {
 	client    *api.Client
 	width     int
@@ -62,10 +70,12 @@ type Model struct {
 	state     state
 	prevState state
 
-	feeds    [tabCount][]api.FeedItem
-	cursor   [tabCount]int
-	loading  [tabCount]bool
-	fetchErr [tabCount]string
+	feeds       [tabCount][]api.FeedItem
+	cursor      [tabCount]int
+	loading     [tabCount]bool
+	loadingMore [tabCount]bool
+	nextCursor  [tabCount]string
+	fetchErr    [tabCount]string
 
 	detailItem api.FeedItem
 	replyTo    *api.Post
@@ -104,13 +114,28 @@ func (m *Model) Init() tea.Cmd {
 func fetchFeed(client *api.Client, t tab) tea.Cmd {
 	return func() tea.Msg {
 		var items []api.FeedItem
+		var cursor string
 		var err error
 		if t == tabHome {
-			items, err = client.GetTimeline(50)
+			items, cursor, err = client.GetTimeline(50, "")
 		} else {
-			items, err = client.GetDiscoverFeed(50)
+			items, cursor, err = client.GetDiscoverFeed(50, "")
 		}
-		return fetchedMsg{tab: t, items: items, err: err}
+		return fetchedMsg{tab: t, items: items, cursor: cursor, err: err}
+	}
+}
+
+func loadMoreFeed(client *api.Client, t tab, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		var items []api.FeedItem
+		var nextCursor string
+		var err error
+		if t == tabHome {
+			items, nextCursor, err = client.GetTimeline(50, cursor)
+		} else {
+			items, nextCursor, err = client.GetDiscoverFeed(50, cursor)
+		}
+		return appendedMsg{tab: t, items: items, cursor: nextCursor, err: err}
 	}
 }
 
@@ -170,11 +195,11 @@ func unbookmarkPost(client *api.Client, postURI string) tea.Cmd {
 
 func loadBookmarks(client *api.Client) tea.Cmd {
 	return func() tea.Msg {
-		items, err := client.GetBookmarks(50)
+		items, cursor, err := client.GetBookmarks(50, "")
 		if err != nil {
 			return fetchedMsg{tab: tabSaved, err: err}
 		}
-		return fetchedMsg{tab: tabSaved, items: items}
+		return fetchedMsg{tab: tabSaved, items: items, cursor: cursor}
 	}
 }
 
@@ -192,6 +217,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fetchErr[msg.tab] = msg.err.Error()
 		} else {
 			m.feeds[msg.tab] = msg.items
+			m.nextCursor[msg.tab] = msg.cursor
+			m.fetchErr[msg.tab] = ""
+		}
+		return m, nil
+
+	case appendedMsg:
+		m.loadingMore[msg.tab] = false
+		if msg.err != nil {
+			m.fetchErr[msg.tab] = msg.err.Error()
+		} else {
+			m.feeds[msg.tab] = append(m.feeds[msg.tab], msg.items...)
+			m.nextCursor[msg.tab] = msg.cursor
 			m.fetchErr[msg.tab] = ""
 		}
 		return m, nil
@@ -284,6 +321,9 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			feed := m.feeds[m.activeTab]
 			if m.cursor[m.activeTab] < len(feed)-1 {
 				m.cursor[m.activeTab]++
+			} else if !m.loadingMore[m.activeTab] && m.nextCursor[m.activeTab] != "" && m.activeTab != tabSaved {
+				m.loadingMore[m.activeTab] = true
+				return m, loadMoreFeed(m.client, m.activeTab, m.nextCursor[m.activeTab])
 			}
 
 		case "k":
@@ -542,7 +582,15 @@ func (m *Model) renderTimeline(height int) string {
 		lines = append(lines, rendered)
 	}
 
-	return strings.Join(lines, "\n")
+	result := strings.Join(lines, "\n")
+	if m.loadingMore[t] {
+		loadingLine := lipgloss.NewStyle().
+			Foreground(colorMuted).
+			Padding(0, 2).
+			Render("Loading more...")
+		result += "\n" + loadingLine
+	}
+	return result
 }
 
 func (m *Model) renderDetailFull() string {
