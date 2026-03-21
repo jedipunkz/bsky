@@ -81,7 +81,7 @@ func New(client *api.Client, theme string) *Model {
 	applyTheme(theme)
 
 	ta := textarea.New()
-	ta.Placeholder = "What's on your mind? (Ctrl+Enter to post, Esc to cancel)"
+	ta.Placeholder = "What's on your mind? (Ctrl+S to post, Esc to cancel)"
 	ta.CharLimit = 300
 	ta.SetWidth(60)
 	ta.SetHeight(5)
@@ -409,7 +409,7 @@ func (m *Model) updateCompose(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.replyTo = nil
 			m.composeErr = ""
 			return m, nil
-		case "ctrl+enter":
+		case "ctrl+s":
 			text := strings.TrimSpace(m.compose.Value())
 			if text == "" {
 				m.composeErr = "Post cannot be empty"
@@ -623,7 +623,7 @@ func (m *Model) renderOverlay(base string) string {
 		errLine = "\n" + errorStyle.Render(m.composeErr)
 	}
 
-	help := handleStyle.Render("Ctrl+Enter: post  Esc: cancel")
+	help := handleStyle.Render("Ctrl+S: post  Esc: cancel")
 
 	title := "New Post"
 	if m.replyTo != nil {
