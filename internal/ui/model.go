@@ -8,7 +8,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jedipunkz/bsky/internal/api"
-	"github.com/jedipunkz/bsky/internal/config"
 )
 
 type tab int
@@ -93,7 +92,7 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		fetchFeed(m.client, tabHome),
 		fetchFeed(m.client, tabDiscover),
-		loadBookmarks(),
+		loadBookmarks(m.client),
 	)
 }
 
@@ -136,53 +135,18 @@ func repostPost(client *api.Client, uri, cid string) tea.Cmd {
 	}
 }
 
-func bookmarkPost(item api.FeedItem) tea.Cmd {
+func bookmarkPost(client *api.Client, item api.FeedItem) tea.Cmd {
 	return func() tea.Msg {
-		posts, err := config.LoadBookmarks()
-		if err != nil {
-			return bookmarkMsg{err: err}
-		}
-		for _, p := range posts {
-			if p.URI == item.Post.URI {
-				return bookmarkMsg{err: nil}
-			}
-		}
-		posts = append(posts, config.BookmarkedPost{
-			URI:         item.Post.URI,
-			CID:         item.Post.CID,
-			Handle:      item.Post.Author.Handle,
-			DisplayName: item.Post.Author.DisplayName,
-			Text:        item.Post.Record.Text,
-			LikeCount:   item.Post.LikeCount,
-			RepostCount: item.Post.RepostCount,
-			ReplyCount:  item.Post.ReplyCount,
-		})
-		return bookmarkMsg{err: config.SaveBookmarks(posts)}
+		err := client.CreateBookmark(item.Post.URI, item.Post.CID)
+		return bookmarkMsg{err: err}
 	}
 }
 
-func loadBookmarks() tea.Cmd {
+func loadBookmarks(client *api.Client) tea.Cmd {
 	return func() tea.Msg {
-		posts, err := config.LoadBookmarks()
+		items, err := client.GetBookmarks(50)
 		if err != nil {
 			return fetchedMsg{tab: tabSaved, err: err}
-		}
-		items := make([]api.FeedItem, len(posts))
-		for i, p := range posts {
-			items[i] = api.FeedItem{
-				Post: api.Post{
-					URI: p.URI,
-					CID: p.CID,
-					Author: api.Author{
-						Handle:      p.Handle,
-						DisplayName: p.DisplayName,
-					},
-					Record:      api.PostRecord{Text: p.Text},
-					LikeCount:   p.LikeCount,
-					RepostCount: p.RepostCount,
-					ReplyCount:  p.ReplyCount,
-				},
-			}
 		}
 		return fetchedMsg{tab: tabSaved, items: items}
 	}
@@ -245,7 +209,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "Bookmark failed: " + msg.err.Error()
 		} else {
 			m.statusMsg = "Bookmarked!"
-			return m, loadBookmarks()
+			return m, loadBookmarks(m.client)
 		}
 		return m, nil
 	}
@@ -310,7 +274,7 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading[m.activeTab] = true
 			m.cursor[m.activeTab] = 0
 			if m.activeTab == tabSaved {
-				return m, loadBookmarks()
+				return m, loadBookmarks(m.client)
 			}
 			return m, fetchFeed(m.client, m.activeTab)
 
@@ -344,7 +308,7 @@ func (m *Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, repostPost(m.client, post.URI, post.CID)
 
 		case "b":
-			return m, bookmarkPost(m.detailItem)
+			return m, bookmarkPost(m.client, m.detailItem)
 
 		case "c":
 			p := m.detailItem.Post

@@ -247,6 +247,100 @@ func (c *Client) Repost(uri, cid string) error {
 	})
 }
 
+type createBookmarkReq struct {
+	URI string `json:"uri"`
+	CID string `json:"cid"`
+}
+
+func (c *Client) CreateBookmark(uri, cid string) error {
+	body, _ := json.Marshal(createBookmarkReq{URI: uri, CID: cid})
+	req, _ := http.NewRequest("POST", baseURL+"/app.bsky.bookmark.createBookmark", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+c.accessJWT)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == 401 {
+		if err := c.RefreshSession(); err != nil {
+			return fmt.Errorf("session expired")
+		}
+		return c.CreateBookmark(uri, cid)
+	}
+	if resp.StatusCode != 200 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("create bookmark failed: %s", string(data))
+	}
+	return nil
+}
+
+type bookmarkItemView struct {
+	URI         string     `json:"uri"`
+	CID         string     `json:"cid"`
+	Author      Author     `json:"author"`
+	Record      PostRecord `json:"record"`
+	LikeCount   int        `json:"likeCount"`
+	RepostCount int        `json:"repostCount"`
+	ReplyCount  int        `json:"replyCount"`
+}
+
+type bookmarkEntry struct {
+	Subject   struct {
+		URI string `json:"uri"`
+		CID string `json:"cid"`
+	} `json:"subject"`
+	CreatedAt string           `json:"createdAt"`
+	Item      bookmarkItemView `json:"item"`
+}
+
+type getBookmarksResp struct {
+	Bookmarks []bookmarkEntry `json:"bookmarks"`
+	Cursor    string          `json:"cursor"`
+}
+
+func (c *Client) GetBookmarks(limit int) ([]FeedItem, error) {
+	req, _ := http.NewRequest("GET", fmt.Sprintf("%s/app.bsky.bookmark.getBookmarks?limit=%d", baseURL, limit), nil)
+	req.Header.Set("Authorization", "Bearer "+c.accessJWT)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == 401 {
+		if err := c.RefreshSession(); err != nil {
+			return nil, fmt.Errorf("session expired")
+		}
+		return c.GetBookmarks(limit)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("get bookmarks error: %s", string(data))
+	}
+	var br getBookmarksResp
+	if err := json.Unmarshal(data, &br); err != nil {
+		return nil, err
+	}
+	items := make([]FeedItem, 0, len(br.Bookmarks))
+	for _, bm := range br.Bookmarks {
+		if bm.Item.CID == "" {
+			continue
+		}
+		items = append(items, FeedItem{
+			Post: Post{
+				URI:         bm.Item.URI,
+				CID:         bm.Item.CID,
+				Author:      bm.Item.Author,
+				Record:      bm.Item.Record,
+				LikeCount:   bm.Item.LikeCount,
+				RepostCount: bm.Item.RepostCount,
+				ReplyCount:  bm.Item.ReplyCount,
+			},
+		})
+	}
+	return items, nil
+}
+
 type replyRef struct {
 	Root   subjectRef `json:"root"`
 	Parent subjectRef `json:"parent"`
