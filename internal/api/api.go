@@ -151,15 +151,44 @@ type PostViewer struct {
 	Repost string `json:"repost"` // URI of user's repost record, empty if not reposted
 }
 
+type EmbedImageView struct {
+	Thumb    string `json:"thumb"`
+	Fullsize string `json:"fullsize"`
+	Alt      string `json:"alt"`
+}
+
+type PostEmbedView struct {
+	Type   string           `json:"$type"`
+	Images []EmbedImageView `json:"images"`
+	// recordWithMedia nests images under "media"
+	Media *PostEmbedView `json:"media"`
+}
+
+// EmbedImages returns images regardless of whether they are top-level or
+// nested inside a recordWithMedia embed.
+func (e *PostEmbedView) EmbedImages() []EmbedImageView {
+	if e == nil {
+		return nil
+	}
+	if len(e.Images) > 0 {
+		return e.Images
+	}
+	if e.Media != nil {
+		return e.Media.Images
+	}
+	return nil
+}
+
 type Post struct {
-	URI         string     `json:"uri"`
-	CID         string     `json:"cid"`
-	Author      Author     `json:"author"`
-	Record      PostRecord `json:"record"`
-	LikeCount   int        `json:"likeCount"`
-	RepostCount int        `json:"repostCount"`
-	ReplyCount  int        `json:"replyCount"`
-	Viewer      PostViewer `json:"viewer"`
+	URI         string         `json:"uri"`
+	CID         string         `json:"cid"`
+	Author      Author         `json:"author"`
+	Record      PostRecord     `json:"record"`
+	LikeCount   int            `json:"likeCount"`
+	RepostCount int            `json:"repostCount"`
+	ReplyCount  int            `json:"replyCount"`
+	Viewer      PostViewer     `json:"viewer"`
+	Embed       *PostEmbedView `json:"embed"`
 }
 
 type FeedItem struct {
