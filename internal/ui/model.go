@@ -667,7 +667,7 @@ func (m *Model) View() string {
 func (m *Model) renderTabs() string {
 	var line string
 	if m.searchLoading || m.inSearch {
-		line = activeTabStyle.Render("Search\u00a0Result")
+		line = activeTabStyle.UnsetUnderline().Render("Search Result")
 	} else {
 		tabs := []string{"Home", "Discover", "Saved"}
 		var rendered []string
