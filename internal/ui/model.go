@@ -90,6 +90,12 @@ type fetchedProfileMsg struct {
 	err     error
 }
 
+type followMsg struct {
+	err       error
+	followURI string
+	followed  bool
+}
+
 type fetchedAuthorFeedMsg struct {
 	tabType profileTabType
 	items   []api.FeedItem
@@ -274,6 +280,20 @@ func loadMoreSearch(client *api.Client, query, cursor string) tea.Cmd {
 	}
 }
 
+func followUser(client *api.Client, did string) tea.Cmd {
+	return func() tea.Msg {
+		followURI, err := client.Follow(did)
+		return followMsg{err: err, followURI: followURI, followed: true}
+	}
+}
+
+func unfollowUser(client *api.Client, followURI string) tea.Cmd {
+	return func() tea.Msg {
+		err := client.Unfollow(followURI)
+		return followMsg{err: err, followed: false}
+	}
+}
+
 func fetchProfile(client *api.Client, actor string) tea.Cmd {
 	return func() tea.Msg {
 		profile, err := client.GetProfile(actor)
@@ -447,6 +467,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchResults = append(m.searchResults, filtered...)
 			m.searchNextCursor = msg.cursor
 			m.statusMsg = fmt.Sprintf("Search: %q (%d results)", m.searchQuery, len(m.searchResults))
+		}
+		return m, nil
+
+	case followMsg:
+		if msg.err != nil {
+			m.statusMsg = "Follow failed: " + msg.err.Error()
+		} else if msg.followed {
+			m.statusMsg = "Followed!"
+			if m.profileData != nil {
+				m.profileData.Viewer.Following = msg.followURI
+				m.profileData.FollowersCount++
+			}
+		} else {
+			m.statusMsg = "Unfollowed!"
+			if m.profileData != nil {
+				m.profileData.Viewer.Following = ""
+				if m.profileData.FollowersCount > 0 {
+					m.profileData.FollowersCount--
+				}
+			}
 		}
 		return m, nil
 
@@ -766,6 +806,14 @@ func (m *Model) updateUserProfile(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "esc":
 			m.state = m.profilePrevState
 			m.statusMsg = ""
+		case "f":
+			if m.profileData == nil {
+				return m, nil
+			}
+			if m.profileData.Viewer.Following != "" {
+				return m, unfollowUser(m.client, m.profileData.Viewer.Following)
+			}
+			return m, followUser(m.client, m.profileData.DID)
 		case "h":
 			if m.profileActiveTab > 0 {
 				m.profileActiveTab--
@@ -1205,6 +1253,9 @@ func (m *Model) renderUserProfile(base string) string {
 			"フォロワー: %d  フォロー: %d  投稿: %d",
 			p.FollowersCount, p.FollowsCount, p.PostsCount,
 		)))
+		if p.Viewer.Following != "" {
+			headerParts = append(headerParts, lipgloss.NewStyle().Foreground(colorSuccess).Render("フォロー中"))
+		}
 	}
 	header := strings.Join(headerParts, "\n")
 
@@ -1220,7 +1271,7 @@ func (m *Model) renderUserProfile(base string) string {
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabPosts, tabReplies)
 
 	divider := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW))
-	help := handleStyle.Render("h/l: tab  j/k: scroll  q: back")
+	help := handleStyle.Render("h/l: tab  j/k: scroll  f: follow/unfollow  q: back")
 
 	// Measure non-posts content height accurately
 	frameContent := lipgloss.JoinVertical(lipgloss.Left, header, "", tabBar, divider, help)
