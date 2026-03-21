@@ -25,6 +25,13 @@ func main() {
 	// Use saved session if available
 	if cfg.AccessJWT != "" {
 		client.SetSession(cfg.AccessJWT, cfg.RefreshJWT, cfg.DID, cfg.Handle)
+		client.SetOnRefresh(func(accessJWT, refreshJWT string) {
+			cfg.AccessJWT = accessJWT
+			cfg.RefreshJWT = refreshJWT
+			_ = config.Save(cfg)
+		})
+		// Proactively refresh access token on startup to avoid ExpiredToken errors
+		_ = client.RefreshSession()
 	} else {
 		// Interactive login
 		if err := login(client, cfg); err != nil {
