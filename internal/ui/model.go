@@ -555,8 +555,12 @@ func (m *Model) renderDetailFull() string {
 
 	header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
 	body := textStyle.Render(wrapText(post.Record.Text, m.width-8))
-	stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
-		post.LikeCount, post.RepostCount, post.ReplyCount))
+	bookmarkMark := ""
+	if m.isBookmarked(post.URI) {
+		bookmarkMark = "  ★"
+	}
+	stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d%s",
+		post.LikeCount, post.RepostCount, post.ReplyCount, bookmarkMark))
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		header,
