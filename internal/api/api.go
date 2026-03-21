@@ -103,12 +103,13 @@ type PostRecord struct {
 }
 
 type Post struct {
-	URI    string     `json:"uri"`
-	Author Author     `json:"author"`
-	Record PostRecord `json:"record"`
-	LikeCount   int `json:"likeCount"`
-	RepostCount int `json:"repostCount"`
-	ReplyCount  int `json:"replyCount"`
+	URI         string     `json:"uri"`
+	CID         string     `json:"cid"`
+	Author      Author     `json:"author"`
+	Record      PostRecord `json:"record"`
+	LikeCount   int        `json:"likeCount"`
+	RepostCount int        `json:"repostCount"`
+	ReplyCount  int        `json:"replyCount"`
 }
 
 type FeedItem struct {
@@ -171,28 +172,15 @@ func (c *Client) GetDiscoverFeed(limit int) ([]FeedItem, error) {
 	return tr.Feed, nil
 }
 
-type createRecordReq struct {
-	Repo       string     `json:"repo"`
-	Collection string     `json:"collection"`
-	Record     postRecord `json:"record"`
-}
-
-type postRecord struct {
-	Type      string `json:"$type"`
-	Text      string `json:"text"`
-	CreatedAt string `json:"createdAt"`
-}
-
-func (c *Client) CreatePost(text string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	body, _ := json.Marshal(createRecordReq{
+func (c *Client) createRecord(collection string, record interface{}) error {
+	body, _ := json.Marshal(struct {
+		Repo       string      `json:"repo"`
+		Collection string      `json:"collection"`
+		Record     interface{} `json:"record"`
+	}{
 		Repo:       c.DID,
-		Collection: "app.bsky.feed.post",
-		Record: postRecord{
-			Type:      "app.bsky.feed.post",
-			Text:      text,
-			CreatedAt: now,
-		},
+		Collection: collection,
+		Record:     record,
 	})
 	req, _ := http.NewRequest("POST", baseURL+"/com.atproto.repo.createRecord", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+c.accessJWT)
@@ -204,7 +192,82 @@ func (c *Client) CreatePost(text string) error {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		data, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("post failed: %s", string(data))
+		return fmt.Errorf("create record failed: %s", string(data))
 	}
 	return nil
+}
+
+type postRecord struct {
+	Type      string `json:"$type"`
+	Text      string `json:"text"`
+	CreatedAt string `json:"createdAt"`
+}
+
+func (c *Client) CreatePost(text string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	return c.createRecord("app.bsky.feed.post", postRecord{
+		Type:      "app.bsky.feed.post",
+		Text:      text,
+		CreatedAt: now,
+	})
+}
+
+type subjectRef struct {
+	URI string `json:"uri"`
+	CID string `json:"cid"`
+}
+
+type likeRecord struct {
+	Type      string     `json:"$type"`
+	Subject   subjectRef `json:"subject"`
+	CreatedAt string     `json:"createdAt"`
+}
+
+func (c *Client) Like(uri, cid string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	return c.createRecord("app.bsky.feed.like", likeRecord{
+		Type:      "app.bsky.feed.like",
+		Subject:   subjectRef{URI: uri, CID: cid},
+		CreatedAt: now,
+	})
+}
+
+type repostRecord struct {
+	Type      string     `json:"$type"`
+	Subject   subjectRef `json:"subject"`
+	CreatedAt string     `json:"createdAt"`
+}
+
+func (c *Client) Repost(uri, cid string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	return c.createRecord("app.bsky.feed.repost", repostRecord{
+		Type:      "app.bsky.feed.repost",
+		Subject:   subjectRef{URI: uri, CID: cid},
+		CreatedAt: now,
+	})
+}
+
+type replyRef struct {
+	Root   subjectRef `json:"root"`
+	Parent subjectRef `json:"parent"`
+}
+
+type replyPostRecord struct {
+	Type      string   `json:"$type"`
+	Text      string   `json:"text"`
+	CreatedAt string   `json:"createdAt"`
+	Reply     replyRef `json:"reply"`
+}
+
+func (c *Client) CreateReply(text, parentURI, parentCID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	return c.createRecord("app.bsky.feed.post", replyPostRecord{
+		Type:      "app.bsky.feed.post",
+		Text:      text,
+		CreatedAt: now,
+		Reply: replyRef{
+			Root:   subjectRef{URI: parentURI, CID: parentCID},
+			Parent: subjectRef{URI: parentURI, CID: parentCID},
+		},
+	})
 }
