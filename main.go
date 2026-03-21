@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"syscall"
-	"unsafe"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jedipunkz/bsky/internal/api"
 	"github.com/jedipunkz/bsky/internal/config"
 	"github.com/jedipunkz/bsky/internal/ui"
+	"golang.org/x/term"
 )
 
 func main() {
@@ -77,24 +76,11 @@ func login(client *api.Client, cfg *config.Config) error {
 }
 
 func readPassword() (string, error) {
-	var oldState syscall.Termios
 	fd := int(os.Stdin.Fd())
-	if _, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
-		syscall.TCGETS, uintptr(unsafe.Pointer(&oldState)), 0, 0, 0); errno != 0 {
-		reader := bufio.NewReader(os.Stdin)
-		pw, err := reader.ReadString('\n')
-		return strings.TrimSpace(pw), err
+	if term.IsTerminal(fd) {
+		pw, err := term.ReadPassword(fd)
+		return string(pw), err
 	}
-
-	newState := oldState
-	newState.Lflag &^= syscall.ECHO
-	_, _, _ = syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
-		syscall.TCSETS, uintptr(unsafe.Pointer(&newState)), 0, 0, 0)
-	defer func() {
-		_, _, _ = syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
-			syscall.TCSETS, uintptr(unsafe.Pointer(&oldState)), 0, 0, 0)
-	}()
-
 	reader := bufio.NewReader(os.Stdin)
 	pw, err := reader.ReadString('\n')
 	return strings.TrimSpace(pw), err
