@@ -90,6 +90,7 @@ type Model struct {
 
 	imageCache  map[string]*imageCacheEntry
 	imgFetching map[string]bool
+	imgFetchErr map[string]string
 }
 
 func New(client *api.Client, theme string) *Model {
@@ -107,6 +108,7 @@ func New(client *api.Client, theme string) *Model {
 		compose:     ta,
 		imageCache:  make(map[string]*imageCacheEntry),
 		imgFetching: make(map[string]bool),
+		imgFetchErr: make(map[string]string),
 	}
 }
 
@@ -270,7 +272,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case imageFetchedMsg:
 		delete(m.imgFetching, msg.url)
-		if msg.err == nil && msg.img != nil {
+		if msg.err != nil {
+			m.imgFetchErr[msg.url] = msg.err.Error()
+		} else if msg.img != nil {
+			delete(m.imgFetchErr, msg.url)
 			list := renderImageBlocks(msg.img, listImageCols, listImageRows)
 			m.imageCache[msg.url] = &imageCacheEntry{raw: msg.img, list: list}
 		}
@@ -640,6 +645,8 @@ func (m *Model) renderTimeline(height int) string {
 			url := post.Embed.Images[0].Thumb
 			if entry, ok := m.imageCache[url]; ok {
 				rendered += "\n" + entry.list
+			} else if errMsg, hasErr := m.imgFetchErr[url]; hasErr {
+				rendered += "\n" + errorStyle.Render("  [🖼 "+errMsg+"]")
 			} else {
 				rendered += "\n" + statsStyle.Render("  [🖼 loading...]")
 			}
@@ -682,6 +689,8 @@ func (m *Model) renderDetailFull() string {
 			if cols > 0 {
 				imgLine = renderImageBlocks(entry.raw, cols, 12)
 			}
+		} else if errMsg, hasErr := m.imgFetchErr[url]; hasErr {
+			imgLine = errorStyle.Render("  [🖼 " + errMsg + "]")
 		} else {
 			imgLine = statsStyle.Render("  [🖼 loading...]")
 		}
