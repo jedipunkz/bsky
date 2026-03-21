@@ -589,20 +589,27 @@ func (m *Model) renderTimeline(height int) string {
 		stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
 			post.LikeCount, post.RepostCount, post.ReplyCount))
 
-		contentParts := []string{header, textStyle.Render(body)}
-		if post.Embed != nil && len(post.Embed.Images) > 0 {
-			if entry, ok := m.imageCache[post.Embed.Images[0].Thumb]; ok {
-				contentParts = append(contentParts, entry.list)
-			}
-		}
-		contentParts = append(contentParts, stats)
-		content := lipgloss.JoinVertical(lipgloss.Left, contentParts...)
+		content := lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			textStyle.Render(body),
+			stats,
+		)
 
 		var rendered string
 		if selected {
 			rendered = selectedPostStyle.Width(m.width - 4).Render(content)
 		} else {
 			rendered = postStyle.Width(m.width - 4).Render(content)
+		}
+
+		// Append image outside the lipgloss box to avoid ANSI code mangling
+		if post.Embed != nil && len(post.Embed.Images) > 0 {
+			url := post.Embed.Images[0].Thumb
+			if entry, ok := m.imageCache[url]; ok {
+				rendered += "\n" + entry.list
+			} else {
+				rendered += "\n" + statsStyle.Render("  [🖼 loading...]")
+			}
 		}
 		lines = append(lines, rendered)
 	}
@@ -627,23 +634,25 @@ func (m *Model) renderDetailFull() string {
 	stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d%s",
 		post.LikeCount, post.RepostCount, post.ReplyCount, bookmarkMark))
 
-	contentParts := []string{header, "", body, ""}
+	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", stats)
+	postBox := selectedPostStyle.Width(m.width - 4).Render(content)
+
+	// Append image outside the lipgloss box to avoid ANSI code mangling
+	var imgLine string
 	if post.Embed != nil && len(post.Embed.Images) > 0 {
-		if entry, ok := m.imageCache[post.Embed.Images[0].Thumb]; ok && entry.raw != nil {
+		url := post.Embed.Images[0].Thumb
+		if entry, ok := m.imageCache[url]; ok && entry.raw != nil {
 			cols := m.width - 8
 			if cols > 80 {
 				cols = 80
 			}
 			if cols > 0 {
-				imgRender := renderImageBlocks(entry.raw, cols, 12)
-				contentParts = append(contentParts, imgRender, "")
+				imgLine = renderImageBlocks(entry.raw, cols, 12)
 			}
+		} else {
+			imgLine = statsStyle.Render("  [🖼 loading...]")
 		}
 	}
-	contentParts = append(contentParts, stats)
-	content := lipgloss.JoinVertical(lipgloss.Left, contentParts...)
-
-	postBox := selectedPostStyle.Width(m.width - 4).Render(content)
 
 	var statusLine string
 	if m.statusMsg != "" {
@@ -654,7 +663,14 @@ func (m *Model) renderDetailFull() string {
 	help := handleStyle.Width(m.width).Render("l: like/unlike  r: repost/unrepost  b: bookmark/unbookmark  c: comment  esc/q: back")
 	footer := statusBarStyle.Width(m.width).Render("")
 
-	main := lipgloss.JoinVertical(lipgloss.Left, divider, postBox, statusLine)
+	mainParts := []string{divider, postBox}
+	if imgLine != "" {
+		mainParts = append(mainParts, imgLine)
+	}
+	if statusLine != "" {
+		mainParts = append(mainParts, statusLine)
+	}
+	main := lipgloss.JoinVertical(lipgloss.Left, mainParts...)
 	return lipgloss.JoinVertical(lipgloss.Left, main, help, footer)
 }
 
