@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -102,6 +103,11 @@ type PostRecord struct {
 	CreatedAt string `json:"createdAt"`
 }
 
+type PostViewer struct {
+	Like   string `json:"like"`   // URI of user's like record, empty if not liked
+	Repost string `json:"repost"` // URI of user's repost record, empty if not reposted
+}
+
 type Post struct {
 	URI         string     `json:"uri"`
 	CID         string     `json:"cid"`
@@ -110,6 +116,7 @@ type Post struct {
 	LikeCount   int        `json:"likeCount"`
 	RepostCount int        `json:"repostCount"`
 	ReplyCount  int        `json:"replyCount"`
+	Viewer      PostViewer `json:"viewer"`
 }
 
 type FeedItem struct {
@@ -172,7 +179,7 @@ func (c *Client) GetDiscoverFeed(limit int) ([]FeedItem, error) {
 	return tr.Feed, nil
 }
 
-func (c *Client) createRecord(collection string, record interface{}) error {
+func (c *Client) createRecord(collection string, record interface{}) (string, error) {
 	body, _ := json.Marshal(struct {
 		Repo       string      `json:"repo"`
 		Collection string      `json:"collection"`
@@ -187,12 +194,46 @@ func (c *Client) createRecord(collection string, record interface{}) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("create record failed: %s", string(data))
+	}
+	var result struct {
+		URI string `json:"uri"`
+	}
+	_ = json.Unmarshal(data, &result)
+	return result.URI, nil
+}
+
+func (c *Client) deleteRecord(recordURI string) error {
+	trimmed := strings.TrimPrefix(recordURI, "at://")
+	parts := strings.SplitN(trimmed, "/", 3)
+	if len(parts) != 3 {
+		return fmt.Errorf("invalid record URI: %s", recordURI)
+	}
+	body, _ := json.Marshal(struct {
+		Repo       string `json:"repo"`
+		Collection string `json:"collection"`
+		Rkey       string `json:"rkey"`
+	}{
+		Repo:       parts[0],
+		Collection: parts[1],
+		Rkey:       parts[2],
+	})
+	req, _ := http.NewRequest("POST", baseURL+"/com.atproto.repo.deleteRecord", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+c.accessJWT)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		data, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("create record failed: %s", string(data))
+		return fmt.Errorf("delete record failed: %s", string(data))
 	}
 	return nil
 }
@@ -205,11 +246,12 @@ type postRecord struct {
 
 func (c *Client) CreatePost(text string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	return c.createRecord("app.bsky.feed.post", postRecord{
+	_, err := c.createRecord("app.bsky.feed.post", postRecord{
 		Type:      "app.bsky.feed.post",
 		Text:      text,
 		CreatedAt: now,
 	})
+	return err
 }
 
 type subjectRef struct {
@@ -223,7 +265,7 @@ type likeRecord struct {
 	CreatedAt string     `json:"createdAt"`
 }
 
-func (c *Client) Like(uri, cid string) error {
+func (c *Client) Like(uri, cid string) (string, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	return c.createRecord("app.bsky.feed.like", likeRecord{
 		Type:      "app.bsky.feed.like",
@@ -232,19 +274,27 @@ func (c *Client) Like(uri, cid string) error {
 	})
 }
 
+func (c *Client) Unlike(likeURI string) error {
+	return c.deleteRecord(likeURI)
+}
+
 type repostRecord struct {
 	Type      string     `json:"$type"`
 	Subject   subjectRef `json:"subject"`
 	CreatedAt string     `json:"createdAt"`
 }
 
-func (c *Client) Repost(uri, cid string) error {
+func (c *Client) Repost(uri, cid string) (string, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	return c.createRecord("app.bsky.feed.repost", repostRecord{
 		Type:      "app.bsky.feed.repost",
 		Subject:   subjectRef{URI: uri, CID: cid},
 		CreatedAt: now,
 	})
+}
+
+func (c *Client) Unrepost(repostURI string) error {
+	return c.deleteRecord(repostURI)
 }
 
 type createBookmarkReq struct {
@@ -271,6 +321,31 @@ func (c *Client) CreateBookmark(uri, cid string) error {
 	if resp.StatusCode != 200 {
 		data, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("create bookmark failed: %s", string(data))
+	}
+	return nil
+}
+
+func (c *Client) DeleteBookmark(postURI string) error {
+	body, _ := json.Marshal(struct {
+		URI string `json:"uri"`
+	}{URI: postURI})
+	req, _ := http.NewRequest("POST", baseURL+"/app.bsky.bookmark.deleteBookmark", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+c.accessJWT)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == 401 {
+		if err := c.RefreshSession(); err != nil {
+			return fmt.Errorf("session expired")
+		}
+		return c.DeleteBookmark(postURI)
+	}
+	if resp.StatusCode != 200 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("delete bookmark failed: %s", string(data))
 	}
 	return nil
 }
@@ -355,7 +430,7 @@ type replyPostRecord struct {
 
 func (c *Client) CreateReply(text, parentURI, parentCID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	return c.createRecord("app.bsky.feed.post", replyPostRecord{
+	_, err := c.createRecord("app.bsky.feed.post", replyPostRecord{
 		Type:      "app.bsky.feed.post",
 		Text:      text,
 		CreatedAt: now,
@@ -364,4 +439,5 @@ func (c *Client) CreateReply(text, parentURI, parentCID string) error {
 			Parent: subjectRef{URI: parentURI, CID: parentCID},
 		},
 	})
+	return err
 }

@@ -43,7 +43,7 @@ func TestModelUpdate_BookmarkMsgSuccess(t *testing.T) {
 	m := newTestModel()
 	m.state = stateDetail
 
-	newModel, cmd := m.Update(bookmarkMsg{err: nil})
+	newModel, cmd := m.Update(bookmarkMsg{err: nil, bookmarked: true})
 	m = newModel.(*Model)
 
 	if m.statusMsg != "Bookmarked!" {
