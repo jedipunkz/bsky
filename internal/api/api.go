@@ -160,6 +160,23 @@ type EmbedImageView struct {
 type PostEmbedView struct {
 	Type   string           `json:"$type"`
 	Images []EmbedImageView `json:"images"`
+	// recordWithMedia nests images under "media"
+	Media *PostEmbedView `json:"media"`
+}
+
+// EmbedImages returns images regardless of whether they are top-level or
+// nested inside a recordWithMedia embed.
+func (e *PostEmbedView) EmbedImages() []EmbedImageView {
+	if e == nil {
+		return nil
+	}
+	if len(e.Images) > 0 {
+		return e.Images
+	}
+	if e.Media != nil {
+		return e.Media.Images
+	}
+	return nil
 }
 
 type Post struct {
