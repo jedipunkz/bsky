@@ -202,6 +202,50 @@ func fetchImageCmd(url string) tea.Cmd {
 	}
 }
 
+// fetchVisibleImages returns a command that downloads images only for
+// the posts currently visible in the timeline (lazy loading).
+func (m *Model) fetchVisibleImages() tea.Cmd {
+	t := m.activeTab
+	feed := m.feeds[t]
+	if len(feed) == 0 {
+		return nil
+	}
+	cur := m.cursor[t]
+	// Use a generous window around the cursor
+	const window = 6
+	start := cur - window
+	if start < 0 {
+		start = 0
+	}
+	end := cur + window + 1
+	if end > len(feed) {
+		end = len(feed)
+	}
+	var cmds []tea.Cmd
+	for i := start; i < end; i++ {
+		embed := feed[i].Post.Embed
+		if embed == nil || len(embed.Images) == 0 {
+			continue
+		}
+		url := embed.Images[0].Thumb
+		if url == "" {
+			continue
+		}
+		if _, cached := m.imageCache[url]; cached {
+			continue
+		}
+		if m.imgFetching[url] {
+			continue
+		}
+		m.imgFetching[url] = true
+		cmds = append(cmds, fetchImageCmd(url))
+	}
+	if len(cmds) > 0 {
+		return tea.Batch(cmds...)
+	}
+	return nil
+}
+
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -218,26 +262,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.feeds[msg.tab] = msg.items
 		m.fetchErr[msg.tab] = ""
-		var cmds []tea.Cmd
-		for _, item := range msg.items {
-			if item.Post.Embed == nil || len(item.Post.Embed.Images) == 0 {
-				continue
-			}
-			url := item.Post.Embed.Images[0].Thumb
-			if url == "" {
-				continue
-			}
-			if _, cached := m.imageCache[url]; cached {
-				continue
-			}
-			if m.imgFetching[url] {
-				continue
-			}
-			m.imgFetching[url] = true
-			cmds = append(cmds, fetchImageCmd(url))
-		}
-		if len(cmds) > 0 {
-			return m, tea.Batch(cmds...)
+		// Only fetch images for the visible window, not all posts
+		if msg.tab == m.activeTab {
+			return m, m.fetchVisibleImages()
 		}
 		return m, nil
 
@@ -338,21 +365,25 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor[m.activeTab] < len(feed)-1 {
 				m.cursor[m.activeTab]++
 			}
+			return m, m.fetchVisibleImages()
 
 		case "k":
 			if m.cursor[m.activeTab] > 0 {
 				m.cursor[m.activeTab]--
 			}
+			return m, m.fetchVisibleImages()
 
 		case "h":
 			if m.activeTab > 0 {
 				m.activeTab--
 			}
+			return m, m.fetchVisibleImages()
 
 		case "l":
 			if m.activeTab < tabCount-1 {
 				m.activeTab++
 			}
+			return m, m.fetchVisibleImages()
 
 		case "enter":
 			feed := m.feeds[m.activeTab]
@@ -380,12 +411,14 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "g":
 			m.cursor[m.activeTab] = 0
+			return m, m.fetchVisibleImages()
 
 		case "G":
 			feed := m.feeds[m.activeTab]
 			if len(feed) > 0 {
 				m.cursor[m.activeTab] = len(feed) - 1
 			}
+			return m, m.fetchVisibleImages()
 		}
 	}
 	return m, nil
