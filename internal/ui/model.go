@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -54,6 +55,17 @@ type bookmarkMsg struct {
 	bookmarked bool
 }
 
+type imageFetchedMsg struct {
+	url string
+	img image.Image
+	err error
+}
+
+type imageCacheEntry struct {
+	raw  image.Image
+	list string // pre-rendered at listImageCols × listImageRows
+}
+
 type Model struct {
 	client    *api.Client
 	width     int
@@ -75,6 +87,9 @@ type Model struct {
 	postSuccess bool
 
 	statusMsg string
+
+	imageCache  map[string]*imageCacheEntry
+	imgFetching map[string]bool
 }
 
 func New(client *api.Client, theme string) *Model {
@@ -88,8 +103,10 @@ func New(client *api.Client, theme string) *Model {
 	ta.Focus()
 
 	return &Model{
-		client:  client,
-		compose: ta,
+		client:      client,
+		compose:     ta,
+		imageCache:  make(map[string]*imageCacheEntry),
+		imgFetching: make(map[string]bool),
 	}
 }
 
@@ -178,6 +195,13 @@ func loadBookmarks(client *api.Client) tea.Cmd {
 	}
 }
 
+func fetchImageCmd(url string) tea.Cmd {
+	return func() tea.Msg {
+		img, err := downloadImage(url)
+		return imageFetchedMsg{url: url, img: img, err: err}
+	}
+}
+
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -190,9 +214,38 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading[msg.tab] = false
 		if msg.err != nil {
 			m.fetchErr[msg.tab] = msg.err.Error()
-		} else {
-			m.feeds[msg.tab] = msg.items
-			m.fetchErr[msg.tab] = ""
+			return m, nil
+		}
+		m.feeds[msg.tab] = msg.items
+		m.fetchErr[msg.tab] = ""
+		var cmds []tea.Cmd
+		for _, item := range msg.items {
+			if item.Post.Embed == nil || len(item.Post.Embed.Images) == 0 {
+				continue
+			}
+			url := item.Post.Embed.Images[0].Thumb
+			if url == "" {
+				continue
+			}
+			if _, cached := m.imageCache[url]; cached {
+				continue
+			}
+			if m.imgFetching[url] {
+				continue
+			}
+			m.imgFetching[url] = true
+			cmds = append(cmds, fetchImageCmd(url))
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
+		}
+		return m, nil
+
+	case imageFetchedMsg:
+		delete(m.imgFetching, msg.url)
+		if msg.err == nil && msg.img != nil {
+			list := renderImageBlocks(msg.img, listImageCols, listImageRows)
+			m.imageCache[msg.url] = &imageCacheEntry{raw: msg.img, list: list}
 		}
 		return m, nil
 
@@ -498,8 +551,17 @@ func (m *Model) renderTimeline(height int) string {
 		visibleLines = 1
 	}
 
-	// Estimate lines per post (~4 lines each)
-	postsPerPage := visibleLines / 5
+	// Estimate lines per post (more if images are present)
+	linesPerPost := 5
+	for _, item := range feed {
+		if item.Post.Embed != nil && len(item.Post.Embed.Images) > 0 {
+			if _, ok := m.imageCache[item.Post.Embed.Images[0].Thumb]; ok {
+				linesPerPost = 11
+				break
+			}
+		}
+	}
+	postsPerPage := visibleLines / linesPerPost
 	if postsPerPage < 1 {
 		postsPerPage = 1
 	}
@@ -527,11 +589,14 @@ func (m *Model) renderTimeline(height int) string {
 		stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
 			post.LikeCount, post.RepostCount, post.ReplyCount))
 
-		content := lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			textStyle.Render(body),
-			stats,
-		)
+		contentParts := []string{header, textStyle.Render(body)}
+		if post.Embed != nil && len(post.Embed.Images) > 0 {
+			if entry, ok := m.imageCache[post.Embed.Images[0].Thumb]; ok {
+				contentParts = append(contentParts, entry.list)
+			}
+		}
+		contentParts = append(contentParts, stats)
+		content := lipgloss.JoinVertical(lipgloss.Left, contentParts...)
 
 		var rendered string
 		if selected {
@@ -562,13 +627,21 @@ func (m *Model) renderDetailFull() string {
 	stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d%s",
 		post.LikeCount, post.RepostCount, post.ReplyCount, bookmarkMark))
 
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		"",
-		body,
-		"",
-		stats,
-	)
+	contentParts := []string{header, "", body, ""}
+	if post.Embed != nil && len(post.Embed.Images) > 0 {
+		if entry, ok := m.imageCache[post.Embed.Images[0].Thumb]; ok && entry.raw != nil {
+			cols := m.width - 8
+			if cols > 80 {
+				cols = 80
+			}
+			if cols > 0 {
+				imgRender := renderImageBlocks(entry.raw, cols, 12)
+				contentParts = append(contentParts, imgRender, "")
+			}
+		}
+	}
+	contentParts = append(contentParts, stats)
+	content := lipgloss.JoinVertical(lipgloss.Left, contentParts...)
 
 	postBox := selectedPostStyle.Width(m.width - 4).Render(content)
 

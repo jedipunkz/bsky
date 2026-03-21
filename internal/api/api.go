@@ -108,15 +108,27 @@ type PostViewer struct {
 	Repost string `json:"repost"` // URI of user's repost record, empty if not reposted
 }
 
+type EmbedImageView struct {
+	Thumb    string `json:"thumb"`
+	Fullsize string `json:"fullsize"`
+	Alt      string `json:"alt"`
+}
+
+type PostEmbedView struct {
+	Type   string           `json:"$type"`
+	Images []EmbedImageView `json:"images"`
+}
+
 type Post struct {
-	URI         string     `json:"uri"`
-	CID         string     `json:"cid"`
-	Author      Author     `json:"author"`
-	Record      PostRecord `json:"record"`
-	LikeCount   int        `json:"likeCount"`
-	RepostCount int        `json:"repostCount"`
-	ReplyCount  int        `json:"replyCount"`
-	Viewer      PostViewer `json:"viewer"`
+	URI         string         `json:"uri"`
+	CID         string         `json:"cid"`
+	Author      Author         `json:"author"`
+	Record      PostRecord     `json:"record"`
+	Embed       *PostEmbedView `json:"embed"`
+	LikeCount   int            `json:"likeCount"`
+	RepostCount int            `json:"repostCount"`
+	ReplyCount  int            `json:"replyCount"`
+	Viewer      PostViewer     `json:"viewer"`
 }
 
 type FeedItem struct {
@@ -351,13 +363,14 @@ func (c *Client) DeleteBookmark(postURI string) error {
 }
 
 type bookmarkItemView struct {
-	URI         string     `json:"uri"`
-	CID         string     `json:"cid"`
-	Author      Author     `json:"author"`
-	Record      PostRecord `json:"record"`
-	LikeCount   int        `json:"likeCount"`
-	RepostCount int        `json:"repostCount"`
-	ReplyCount  int        `json:"replyCount"`
+	URI         string         `json:"uri"`
+	CID         string         `json:"cid"`
+	Author      Author         `json:"author"`
+	Record      PostRecord     `json:"record"`
+	Embed       *PostEmbedView `json:"embed"`
+	LikeCount   int            `json:"likeCount"`
+	RepostCount int            `json:"repostCount"`
+	ReplyCount  int            `json:"replyCount"`
 }
 
 type bookmarkEntry struct {
@@ -407,6 +420,7 @@ func (c *Client) GetBookmarks(limit int) ([]FeedItem, error) {
 				CID:         bm.Item.CID,
 				Author:      bm.Item.Author,
 				Record:      bm.Item.Record,
+				Embed:       bm.Item.Embed,
 				LikeCount:   bm.Item.LikeCount,
 				RepostCount: bm.Item.RepostCount,
 				ReplyCount:  bm.Item.ReplyCount,
