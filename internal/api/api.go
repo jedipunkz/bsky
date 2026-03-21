@@ -132,13 +132,18 @@ type PostRecord struct {
 	Reply     *ReplyRef `json:"reply,omitempty"`
 }
 
+type ProfileViewer struct {
+	Following string `json:"following"` // URI of follow record, empty if not following
+}
+
 type Profile struct {
-	DID            string `json:"did"`
-	Handle         string `json:"handle"`
-	DisplayName    string `json:"displayName"`
-	FollowersCount int    `json:"followersCount"`
-	FollowsCount   int    `json:"followsCount"`
-	PostsCount     int    `json:"postsCount"`
+	DID            string        `json:"did"`
+	Handle         string        `json:"handle"`
+	DisplayName    string        `json:"displayName"`
+	FollowersCount int           `json:"followersCount"`
+	FollowsCount   int           `json:"followsCount"`
+	PostsCount     int           `json:"postsCount"`
+	Viewer         ProfileViewer `json:"viewer"`
 }
 
 type PostViewer struct {
@@ -353,6 +358,25 @@ func (c *Client) Repost(uri, cid string) (string, error) {
 
 func (c *Client) Unrepost(repostURI string) error {
 	return c.deleteRecord(repostURI)
+}
+
+type followRecord struct {
+	Type      string `json:"$type"`
+	Subject   string `json:"subject"`
+	CreatedAt string `json:"createdAt"`
+}
+
+func (c *Client) Follow(did string) (string, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	return c.createRecord("app.bsky.graph.follow", followRecord{
+		Type:      "app.bsky.graph.follow",
+		Subject:   did,
+		CreatedAt: now,
+	})
+}
+
+func (c *Client) Unfollow(followURI string) error {
+	return c.deleteRecord(followURI)
 }
 
 type createBookmarkReq struct {
