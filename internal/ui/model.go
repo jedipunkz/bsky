@@ -1170,10 +1170,32 @@ func (m *Model) renderDetailFull() string {
 
 	// Build image line (placed between post and help bar so it stays on screen)
 	var imgLine string
-	if imgs := post.Embed.EmbedImages(); len(imgs) > 0 {
-		imgURL := imgs[0].Fullsize
+	embedImgs := post.Embed.EmbedImages()
+	var debugLine string
+	if post.Embed == nil {
+		debugLine = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("[dbg] embed=nil")
+	} else {
+		embedType := post.Embed.Type
+		imgCount := len(embedImgs)
+		var url0 string
+		if imgCount > 0 {
+			url0 = embedImgs[0].Fullsize
+			if url0 == "" {
+				url0 = embedImgs[0].Thumb
+			}
+		}
+		_, inCache := m.imageCache[url0]
+		errMsg, inErr := m.imageError[url0]
+		inLoading := m.imageLoading[url0]
+		debugLine = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render(
+			fmt.Sprintf("[dbg] type=%s imgs=%d url=%s cache=%v err=%v loading=%v errMsg=%s",
+				embedType, imgCount, url0, inCache, inErr, inLoading, errMsg),
+		)
+	}
+	if len(embedImgs) > 0 {
+		imgURL := embedImgs[0].Fullsize
 		if imgURL == "" {
-			imgURL = imgs[0].Thumb
+			imgURL = embedImgs[0].Thumb
 		}
 		if rendered, ok := m.imageCache[imgURL]; ok {
 			imgLine = rendered
@@ -1192,7 +1214,7 @@ func (m *Model) renderDetailFull() string {
 
 	// Append image outside lipgloss to avoid ANSI escape sequence mangling,
 	// then append help and footer below it.
-	result := main
+	result := main + "\n" + debugLine
 	if imgLine != "" {
 		result += "\n" + imgLine
 	}
