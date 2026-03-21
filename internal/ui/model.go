@@ -329,10 +329,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "Search failed: " + msg.err.Error()
 			m.inSearch = false
 		} else {
-			m.searchResults = msg.items
+			filtered := msg.items[:0]
+			query := strings.ToLower(m.searchQuery)
+			for _, item := range msg.items {
+				if strings.Contains(strings.ToLower(item.Post.Record.Text), query) {
+					filtered = append(filtered, item)
+				}
+			}
+			m.searchResults = filtered
 			m.searchCursor = 0
 			m.inSearch = true
-			m.statusMsg = fmt.Sprintf("Search: %q (%d results)", m.searchQuery, len(msg.items))
+			m.statusMsg = fmt.Sprintf("Search: %q (%d results)", m.searchQuery, len(filtered))
 		}
 		return m, nil
 	}
