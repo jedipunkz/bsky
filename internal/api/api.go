@@ -18,6 +18,11 @@ type Client struct {
 	DID        string
 	Handle     string
 	http       *http.Client
+	onRefresh  func(accessJWT, refreshJWT string)
+}
+
+func (c *Client) SetOnRefresh(fn func(accessJWT, refreshJWT string)) {
+	c.onRefresh = fn
 }
 
 func NewClient() *Client {
@@ -89,7 +94,18 @@ func (c *Client) RefreshSession() error {
 	}
 	c.accessJWT = s.AccessJwt
 	c.refreshJWT = s.RefreshJwt
+	if c.onRefresh != nil {
+		c.onRefresh(s.AccessJwt, s.RefreshJwt)
+	}
 	return nil
+}
+
+func isExpiredToken(data []byte) bool {
+	var e struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(data, &e)
+	return e.Error == "ExpiredToken"
 }
 
 type Author struct {
@@ -137,7 +153,7 @@ func (c *Client) GetTimeline(limit int) ([]FeedItem, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode == 401 {
+	if resp.StatusCode == 401 || isExpiredToken(data) {
 		if err := c.RefreshSession(); err != nil {
 			return nil, fmt.Errorf("session expired, please re-login")
 		}
@@ -163,7 +179,7 @@ func (c *Client) GetDiscoverFeed(limit int) ([]FeedItem, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode == 401 {
+	if resp.StatusCode == 401 || isExpiredToken(data) {
 		if err := c.RefreshSession(); err != nil {
 			return nil, fmt.Errorf("session expired")
 		}
@@ -198,6 +214,12 @@ func (c *Client) createRecord(collection string, record interface{}) (string, er
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == 401 || isExpiredToken(data) {
+		if err := c.RefreshSession(); err != nil {
+			return "", fmt.Errorf("session expired")
+		}
+		return c.createRecord(collection, record)
+	}
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("create record failed: %s", string(data))
 	}
@@ -231,8 +253,14 @@ func (c *Client) deleteRecord(recordURI string) error {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == 401 || isExpiredToken(data) {
+		if err := c.RefreshSession(); err != nil {
+			return fmt.Errorf("session expired")
+		}
+		return c.deleteRecord(recordURI)
+	}
 	if resp.StatusCode != 200 {
-		data, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("delete record failed: %s", string(data))
 	}
 	return nil
@@ -383,7 +411,7 @@ func (c *Client) GetBookmarks(limit int) ([]FeedItem, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode == 401 {
+	if resp.StatusCode == 401 || isExpiredToken(data) {
 		if err := c.RefreshSession(); err != nil {
 			return nil, fmt.Errorf("session expired")
 		}
