@@ -52,6 +52,29 @@ On first launch, you will be prompted for your Bluesky handle and [App Password]
 | `Ctrl+S` | Send post               |
 | `Esc`    | Cancel                  |
 
+## Configuration
+
+The config file is stored at `~/.config/bsky/config.yaml`.
+
+### Color Theme
+
+You can set the `theme` field to one of the following values:
+
+| Theme        | Description                        |
+|--------------|------------------------------------|
+| `tokyonight` | Tokyo Night — dark blue (default)  |
+| `kanagawa`   | Kanagawa Wave — warm dark          |
+| `solarized`  | Solarized Dark — classic           |
+| `catppuccin` | Catppuccin Mocha — pastel dark     |
+
+Example:
+
+```yaml
+theme: kanagawa
+```
+
+If `theme` is not set or is an unrecognized value, `tokyonight` is used.
+
 ## Requirements
 
 - Go 1.24+

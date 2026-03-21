@@ -57,7 +57,9 @@ type Model struct {
 	statusMsg string
 }
 
-func New(client *api.Client) *Model {
+func New(client *api.Client, theme string) *Model {
+	applyTheme(theme)
+
 	ta := textarea.New()
 	ta.Placeholder = "What's on your mind? (Ctrl+S to post, Esc to cancel)"
 	ta.CharLimit = 300
