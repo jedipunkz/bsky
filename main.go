@@ -34,7 +34,7 @@ func main() {
 		}
 	}
 
-	model := ui.New(client)
+	model := ui.New(client, cfg.Theme)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

@@ -8,10 +8,11 @@ import (
 )
 
 type Config struct {
-	Handle      string `yaml:"handle"`
-	AccessJWT   string `yaml:"access_jwt"`
-	RefreshJWT  string `yaml:"refresh_jwt"`
-	DID         string `yaml:"did"`
+	Handle     string `yaml:"handle"`
+	AccessJWT  string `yaml:"access_jwt"`
+	RefreshJWT string `yaml:"refresh_jwt"`
+	DID        string `yaml:"did"`
+	Theme      string `yaml:"theme"`
 }
 
 func configPath() (string, error) {
