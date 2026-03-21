@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -389,6 +390,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.imageError[msg.url] = msg.err.Error()
 		} else {
 			m.imageCache[msg.url] = msg.rendered
+			// Debug: dump rendered string to file so we can inspect it
+			_ = os.WriteFile("/tmp/bsky_img_debug.txt",
+				[]byte(fmt.Sprintf("len=%d iterm2=%v\n---\n%s", len(msg.rendered), iterm2Supported, msg.rendered)),
+				0o600)
 		}
 		return m, nil
 
@@ -1187,9 +1192,10 @@ func (m *Model) renderDetailFull() string {
 		_, inCache := m.imageCache[url0]
 		errMsg, inErr := m.imageError[url0]
 		inLoading := m.imageLoading[url0]
+		cachedLen := len(m.imageCache[url0])
 		debugLine = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render(
-			fmt.Sprintf("[dbg] type=%s imgs=%d url=%s cache=%v err=%v loading=%v errMsg=%s",
-				embedType, imgCount, url0, inCache, inErr, inLoading, errMsg),
+			fmt.Sprintf("[dbg] type=%s imgs=%d cache=%v(len=%d) err=%v(%s) loading=%v iterm2=%v",
+				embedType, imgCount, inCache, cachedLen, inErr, errMsg, inLoading, iterm2Supported),
 		)
 	}
 	if len(embedImgs) > 0 {
