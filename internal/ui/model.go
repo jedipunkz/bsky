@@ -295,7 +295,7 @@ func (m *Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "esc":
+		case "esc", "q":
 			m.state = stateTimeline
 			m.statusMsg = ""
 
@@ -498,7 +498,7 @@ func (m *Model) renderDetailFull() string {
 	}
 
 	divider := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", m.width))
-	help := handleStyle.Width(m.width).Render("l: like  r: repost  b: bookmark  c: comment  esc: back")
+	help := handleStyle.Width(m.width).Render("l: like  r: repost  b: bookmark  c: comment  esc/q: back")
 	footer := statusBarStyle.Width(m.width).Render("")
 
 	main := lipgloss.JoinVertical(lipgloss.Left, divider, postBox, statusLine)
