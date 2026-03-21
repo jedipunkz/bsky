@@ -63,7 +63,7 @@ type imageFetchedMsg struct {
 
 type imageCacheEntry struct {
 	raw  image.Image
-	list string // pre-rendered at listImageCols × listImageRows
+	list string // pre-rendered for list view (aspect-ratio-correct)
 }
 
 type Model struct {
@@ -276,7 +276,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.imgFetchErr[msg.url] = msg.err.Error()
 		} else if msg.img != nil {
 			delete(m.imgFetchErr, msg.url)
-			list := renderImageBlocks(msg.img, listImageCols, listImageRows)
+			list := renderImageBlocks(msg.img, listImageMaxCols, listImageMaxRows)
 			m.imageCache[msg.url] = &imageCacheEntry{raw: msg.img, list: list}
 		}
 		return m, nil
@@ -594,7 +594,7 @@ func (m *Model) renderTimeline(height int) string {
 	for _, item := range feed {
 		if item.Post.Embed != nil && len(item.Post.Embed.Images) > 0 {
 			if _, ok := m.imageCache[item.Post.Embed.Images[0].Thumb]; ok {
-				linesPerPost = listImageRows + 5
+				linesPerPost = listImageMaxRows + 5
 				break
 			}
 		}
@@ -684,7 +684,7 @@ func (m *Model) renderDetailFull() string {
 		if entry, ok := m.imageCache[url]; ok && entry.raw != nil {
 			cols := m.width - 4
 			if cols > 0 {
-				imgLine = renderImageBlocks(entry.raw, cols, 24)
+				imgLine = renderImageBlocks(entry.raw, cols, 40)
 			}
 		} else if errMsg, hasErr := m.imgFetchErr[url]; hasErr {
 			imgLine = errorStyle.Render("  [🖼 " + errMsg + "]")
