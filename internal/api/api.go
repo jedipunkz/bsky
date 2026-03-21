@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -128,55 +129,63 @@ type timelineResp struct {
 	Cursor string     `json:"cursor"`
 }
 
-func (c *Client) GetTimeline(limit int) ([]FeedItem, error) {
-	req, _ := http.NewRequest("GET", fmt.Sprintf("%s/app.bsky.feed.getTimeline?limit=%d", baseURL, limit), nil)
+func (c *Client) GetTimeline(limit int, cursor string) ([]FeedItem, string, error) {
+	u := fmt.Sprintf("%s/app.bsky.feed.getTimeline?limit=%d", baseURL, limit)
+	if cursor != "" {
+		u += "&cursor=" + url.QueryEscape(cursor)
+	}
+	req, _ := http.NewRequest("GET", u, nil)
 	req.Header.Set("Authorization", "Bearer "+c.accessJWT)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == 401 {
 		if err := c.RefreshSession(); err != nil {
-			return nil, fmt.Errorf("session expired, please re-login")
+			return nil, "", fmt.Errorf("session expired, please re-login")
 		}
-		return c.GetTimeline(limit)
+		return c.GetTimeline(limit, cursor)
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("timeline error: %s", string(data))
+		return nil, "", fmt.Errorf("timeline error: %s", string(data))
 	}
 	var tr timelineResp
 	if err := json.Unmarshal(data, &tr); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return tr.Feed, nil
+	return tr.Feed, tr.Cursor, nil
 }
 
-func (c *Client) GetDiscoverFeed(limit int) ([]FeedItem, error) {
+func (c *Client) GetDiscoverFeed(limit int, cursor string) ([]FeedItem, string, error) {
 	feedURI := "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot"
-	req, _ := http.NewRequest("GET", fmt.Sprintf("%s/app.bsky.feed.getFeed?feed=%s&limit=%d", baseURL, feedURI, limit), nil)
+	u := fmt.Sprintf("%s/app.bsky.feed.getFeed?feed=%s&limit=%d", baseURL, feedURI, limit)
+	if cursor != "" {
+		u += "&cursor=" + url.QueryEscape(cursor)
+	}
+	req, _ := http.NewRequest("GET", u, nil)
 	req.Header.Set("Authorization", "Bearer "+c.accessJWT)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == 401 {
 		if err := c.RefreshSession(); err != nil {
-			return nil, fmt.Errorf("session expired")
+			return nil, "", fmt.Errorf("session expired")
 		}
-		return c.GetDiscoverFeed(limit)
+		return c.GetDiscoverFeed(limit, cursor)
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("discover feed error: %s", string(data))
+		return nil, "", fmt.Errorf("discover feed error: %s", string(data))
 	}
 	var tr timelineResp
 	if err := json.Unmarshal(data, &tr); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return tr.Feed, nil
+	return tr.Feed, tr.Cursor, nil
 }
 
 func (c *Client) createRecord(collection string, record interface{}) (string, error) {
@@ -374,27 +383,31 @@ type getBookmarksResp struct {
 	Cursor    string          `json:"cursor"`
 }
 
-func (c *Client) GetBookmarks(limit int) ([]FeedItem, error) {
-	req, _ := http.NewRequest("GET", fmt.Sprintf("%s/app.bsky.bookmark.getBookmarks?limit=%d", baseURL, limit), nil)
+func (c *Client) GetBookmarks(limit int, cursor string) ([]FeedItem, string, error) {
+	u := fmt.Sprintf("%s/app.bsky.bookmark.getBookmarks?limit=%d", baseURL, limit)
+	if cursor != "" {
+		u += "&cursor=" + url.QueryEscape(cursor)
+	}
+	req, _ := http.NewRequest("GET", u, nil)
 	req.Header.Set("Authorization", "Bearer "+c.accessJWT)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == 401 {
 		if err := c.RefreshSession(); err != nil {
-			return nil, fmt.Errorf("session expired")
+			return nil, "", fmt.Errorf("session expired")
 		}
-		return c.GetBookmarks(limit)
+		return c.GetBookmarks(limit, cursor)
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("get bookmarks error: %s", string(data))
+		return nil, "", fmt.Errorf("get bookmarks error: %s", string(data))
 	}
 	var br getBookmarksResp
 	if err := json.Unmarshal(data, &br); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	items := make([]FeedItem, 0, len(br.Bookmarks))
 	for _, bm := range br.Bookmarks {
@@ -413,7 +426,7 @@ func (c *Client) GetBookmarks(limit int) ([]FeedItem, error) {
 			},
 		})
 	}
-	return items, nil
+	return items, br.Cursor, nil
 }
 
 type replyRef struct {
