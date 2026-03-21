@@ -665,16 +665,21 @@ func (m *Model) View() string {
 }
 
 func (m *Model) renderTabs() string {
-	tabs := []string{"Home", "Discover", "Saved"}
-	var rendered []string
-	for i, name := range tabs {
-		if tab(i) == m.activeTab {
-			rendered = append(rendered, activeTabStyle.Render(name))
-		} else {
-			rendered = append(rendered, tabStyle.Render(name))
+	var line string
+	if m.searchLoading || m.inSearch {
+		line = activeTabStyle.Render("Search Result")
+	} else {
+		tabs := []string{"Home", "Discover", "Saved"}
+		var rendered []string
+		for i, name := range tabs {
+			if tab(i) == m.activeTab {
+				rendered = append(rendered, activeTabStyle.Render(name))
+			} else {
+				rendered = append(rendered, tabStyle.Render(name))
+			}
 		}
+		line = lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
 	}
-	line := lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
 	divider := lipgloss.NewStyle().
 		Foreground(colorBorder).
 		Render(strings.Repeat("─", m.width))
