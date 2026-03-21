@@ -45,6 +45,12 @@ type fetchedMsg struct {
 	err    error
 }
 
+type imageFetchedMsg struct {
+	url      string
+	rendered string
+	err      error
+}
+
 type postSentMsg struct {
 	err error
 }
@@ -153,6 +159,9 @@ type Model struct {
 	profileFeedLoadingMore  [profileTabCount]bool
 	profileNextCursors      [profileTabCount]string
 	profilePrevState        state
+
+	imageCache   map[string]string // URL -> pre-rendered image string
+	imageLoading map[string]bool   // URL -> loading in progress
 }
 
 func New(client *api.Client, theme string) *Model {
@@ -170,9 +179,11 @@ func New(client *api.Client, theme string) *Model {
 	si.CharLimit = 100
 
 	return &Model{
-		client:      client,
-		compose:     ta,
-		searchInput: si,
+		client:       client,
+		compose:      ta,
+		searchInput:  si,
+		imageCache:   make(map[string]string),
+		imageLoading: make(map[string]bool),
 	}
 }
 
@@ -351,12 +362,30 @@ func loadBookmarks(client *api.Client) tea.Cmd {
 	}
 }
 
+func fetchDetailImage(url string, maxCols, maxRows int) tea.Cmd {
+	return func() tea.Msg {
+		img, err := downloadImage(url)
+		if err != nil {
+			return imageFetchedMsg{url: url, err: err}
+		}
+		rendered := renderImage(img, maxCols, maxRows)
+		return imageFetchedMsg{url: url, rendered: rendered}
+	}
+}
+
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.compose.SetWidth(m.width/2 - 8)
+		return m, nil
+
+	case imageFetchedMsg:
+		delete(m.imageLoading, msg.url)
+		if msg.err == nil {
+			m.imageCache[msg.url] = msg.rendered
+		}
 		return m, nil
 
 	case fetchedMsg:
@@ -613,12 +642,14 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(m.searchResults) > 0 {
 					m.detailItem = m.searchResults[m.searchCursor]
 					m.state = stateDetail
+					return m, m.fetchDetailImageCmd()
 				}
 			} else {
 				feed := m.feeds[m.activeTab]
 				if len(feed) > 0 {
 					m.detailItem = feed[m.cursor[m.activeTab]]
 					m.state = stateDetail
+					return m, m.fetchDetailImageCmd()
 				}
 			}
 
@@ -977,8 +1008,13 @@ func (m *Model) renderSearchResults(height int) string {
 		}
 		header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
 		body := wrapText(post.Record.Text, m.width-8)
+
+		imgIcon := ""
+		if post.Embed != nil && len(post.Embed.Images) > 0 {
+			imgIcon = "  " + lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("[🖼 %d]", len(post.Embed.Images)))
+		}
 		stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
-			post.LikeCount, post.RepostCount, post.ReplyCount))
+			post.LikeCount, post.RepostCount, post.ReplyCount)) + imgIcon
 
 		content := lipgloss.JoinVertical(lipgloss.Left,
 			header,
@@ -1058,8 +1094,13 @@ func (m *Model) renderTimeline(height int) string {
 		}
 		header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
 		body := wrapText(post.Record.Text, m.width-8)
+
+		imgIcon := ""
+		if post.Embed != nil && len(post.Embed.Images) > 0 {
+			imgIcon = "  " + lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("[🖼 %d]", len(post.Embed.Images)))
+		}
 		stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
-			post.LikeCount, post.RepostCount, post.ReplyCount))
+			post.LikeCount, post.RepostCount, post.ReplyCount)) + imgIcon
 
 		content := lipgloss.JoinVertical(lipgloss.Left,
 			header,
@@ -1124,7 +1165,39 @@ func (m *Model) renderDetailFull() string {
 	footer := statusBarStyle.Width(m.width).Render("")
 
 	main := lipgloss.JoinVertical(lipgloss.Left, divider, postBox, statusLine)
-	return lipgloss.JoinVertical(lipgloss.Left, main, help, footer)
+	result := lipgloss.JoinVertical(lipgloss.Left, main, help, footer)
+
+	// Append inline image outside lipgloss layout to preserve escape sequences
+	if post.Embed != nil && len(post.Embed.Images) > 0 {
+		imgURL := post.Embed.Images[0].Fullsize
+		if rendered, ok := m.imageCache[imgURL]; ok {
+			result += "\n" + rendered
+		} else if m.imageLoading[imgURL] {
+			result += "\n" + lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("[loading image...]")
+		}
+	}
+
+	return result
+}
+
+func (m *Model) fetchDetailImageCmd() tea.Cmd {
+	post := m.detailItem.Post
+	if post.Embed == nil || len(post.Embed.Images) == 0 {
+		return nil
+	}
+	imgURL := post.Embed.Images[0].Fullsize
+	if _, cached := m.imageCache[imgURL]; cached {
+		return nil
+	}
+	if m.imageLoading[imgURL] {
+		return nil
+	}
+	m.imageLoading[imgURL] = true
+	maxCols := m.width - 4
+	if maxCols < 20 {
+		maxCols = 20
+	}
+	return fetchDetailImage(imgURL, maxCols, 40)
 }
 
 func (m *Model) renderHelpBar() string {
