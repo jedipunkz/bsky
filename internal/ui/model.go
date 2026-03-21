@@ -594,7 +594,7 @@ func (m *Model) renderTimeline(height int) string {
 	for _, item := range feed {
 		if item.Post.Embed != nil && len(item.Post.Embed.Images) > 0 {
 			if _, ok := m.imageCache[item.Post.Embed.Images[0].Thumb]; ok {
-				linesPerPost = 11
+				linesPerPost = listImageRows + 5
 				break
 			}
 		}
@@ -682,12 +682,9 @@ func (m *Model) renderDetailFull() string {
 	if post.Embed != nil && len(post.Embed.Images) > 0 {
 		url := post.Embed.Images[0].Thumb
 		if entry, ok := m.imageCache[url]; ok && entry.raw != nil {
-			cols := m.width - 8
-			if cols > 80 {
-				cols = 80
-			}
+			cols := m.width - 4
 			if cols > 0 {
-				imgLine = renderImageBlocks(entry.raw, cols, 12)
+				imgLine = renderImageBlocks(entry.raw, cols, 24)
 			}
 		} else if errMsg, hasErr := m.imgFetchErr[url]; hasErr {
 			imgLine = errorStyle.Render("  [🖼 " + errMsg + "]")

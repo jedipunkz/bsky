@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	listImageCols = 24
-	listImageRows = 5
+	listImageCols = 48
+	listImageRows = 10
 )
 
 var imgHTTPClient = &http.Client{Timeout: 10 * time.Second}
