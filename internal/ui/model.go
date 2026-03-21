@@ -175,6 +175,7 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "r":
 			m.loading[m.activeTab] = true
+			m.cursor[m.activeTab] = 0
 			return m, fetchFeed(m.client, m.activeTab)
 
 		case "g":
