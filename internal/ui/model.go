@@ -23,6 +23,7 @@ type state int
 const (
 	stateTimeline state = iota
 	stateCompose
+	stateDetail
 )
 
 type fetchedMsg struct {
@@ -35,17 +36,29 @@ type postSentMsg struct {
 	err error
 }
 
+type likeMsg struct {
+	err error
+}
+
+type repostMsg struct {
+	err error
+}
+
 type Model struct {
 	client    *api.Client
 	width     int
 	height    int
 	activeTab tab
 	state     state
+	prevState state
 
 	feeds    [tabCount][]api.FeedItem
 	cursor   [tabCount]int
 	loading  [tabCount]bool
 	fetchErr [tabCount]string
+
+	detailItem api.FeedItem
+	replyTo    *api.Post
 
 	compose     textarea.Model
 	composeErr  string
@@ -90,10 +103,29 @@ func fetchFeed(client *api.Client, t tab) tea.Cmd {
 	}
 }
 
-func sendPost(client *api.Client, text string) tea.Cmd {
+func sendPost(client *api.Client, text string, replyTo *api.Post) tea.Cmd {
 	return func() tea.Msg {
-		err := client.CreatePost(text)
+		var err error
+		if replyTo != nil {
+			err = client.CreateReply(text, replyTo.URI, replyTo.CID)
+		} else {
+			err = client.CreatePost(text)
+		}
 		return postSentMsg{err: err}
+	}
+}
+
+func likePost(client *api.Client, uri, cid string) tea.Cmd {
+	return func() tea.Msg {
+		err := client.Like(uri, cid)
+		return likeMsg{err: err}
+	}
+}
+
+func repostPost(client *api.Client, uri, cid string) tea.Cmd {
+	return func() tea.Msg {
+		err := client.Repost(uri, cid)
+		return repostMsg{err: err}
 	}
 }
 
@@ -120,21 +152,44 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.composeErr = msg.err.Error()
 			return m, nil
 		}
-		m.state = stateTimeline
+		m.state = m.prevState
 		m.compose.Reset()
 		m.composeErr = ""
+		m.replyTo = nil
 		m.postSuccess = true
 		m.statusMsg = "Post sent!"
 		return m, tea.Batch(
 			fetchFeed(m.client, tabHome),
 			fetchFeed(m.client, tabDiscover),
 		)
+
+	case likeMsg:
+		if msg.err != nil {
+			m.statusMsg = "Like failed: " + msg.err.Error()
+		} else {
+			m.statusMsg = "Liked!"
+			m.detailItem.Post.LikeCount++
+		}
+		return m, nil
+
+	case repostMsg:
+		if msg.err != nil {
+			m.statusMsg = "Repost failed: " + msg.err.Error()
+		} else {
+			m.statusMsg = "Reposted!"
+			m.detailItem.Post.RepostCount++
+		}
+		return m, nil
 	}
 
-	if m.state == stateCompose {
+	switch m.state {
+	case stateCompose:
 		return m.updateCompose(msg)
+	case stateDetail:
+		return m.updateDetail(msg)
+	default:
+		return m.updateTimeline(msg)
 	}
-	return m.updateTimeline(msg)
 }
 
 func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -167,8 +222,18 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeTab++
 			}
 
+		case "enter":
+			feed := m.feeds[m.activeTab]
+			if len(feed) > 0 {
+				m.detailItem = feed[m.cursor[m.activeTab]]
+				m.state = stateDetail
+				m.statusMsg = ""
+			}
+
 		case "c":
+			m.prevState = stateTimeline
 			m.state = stateCompose
+			m.replyTo = nil
 			m.composeErr = ""
 			m.compose.Reset()
 			m.compose.Focus()
@@ -191,13 +256,46 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.state = stateTimeline
+			m.statusMsg = ""
+
+		case "l":
+			post := m.detailItem.Post
+			return m, likePost(m.client, post.URI, post.CID)
+
+		case "r":
+			post := m.detailItem.Post
+			return m, repostPost(m.client, post.URI, post.CID)
+
+		case "b":
+			m.statusMsg = "Bookmarked!"
+
+		case "c":
+			p := m.detailItem.Post
+			m.replyTo = &p
+			m.prevState = stateDetail
+			m.state = stateCompose
+			m.composeErr = ""
+			m.compose.Reset()
+			m.compose.Focus()
+		}
+	}
+	return m, nil
+}
+
 func (m *Model) updateCompose(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
-			m.state = stateTimeline
+			m.state = m.prevState
+			m.replyTo = nil
 			m.composeErr = ""
 			return m, nil
 		case "ctrl+enter":
@@ -210,7 +308,7 @@ func (m *Model) updateCompose(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.composeErr = "Post exceeds 300 characters"
 				return m, nil
 			}
-			return m, sendPost(m.client, text)
+			return m, sendPost(m.client, text, m.replyTo)
 		}
 	}
 	m.compose, cmd = m.compose.Update(msg)
@@ -220,6 +318,14 @@ func (m *Model) updateCompose(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) View() string {
 	if m.width == 0 {
 		return "Loading..."
+	}
+
+	if m.state == stateDetail || (m.state == stateCompose && m.prevState == stateDetail) {
+		base := m.renderDetailFull()
+		if m.state == stateCompose {
+			return m.renderOverlay(base)
+		}
+		return base
 	}
 
 	header := m.renderTabs()
@@ -328,8 +434,44 @@ func (m *Model) renderTimeline(height int) string {
 	return strings.Join(lines, "\n")
 }
 
+func (m *Model) renderDetailFull() string {
+	post := m.detailItem.Post
+
+	name := post.Author.DisplayName
+	if name == "" {
+		name = post.Author.Handle
+	}
+
+	header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
+	body := textStyle.Render(wrapText(post.Record.Text, m.width-8))
+	stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
+		post.LikeCount, post.RepostCount, post.ReplyCount))
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		"",
+		body,
+		"",
+		stats,
+	)
+
+	postBox := selectedPostStyle.Width(m.width - 4).Render(content)
+
+	var statusLine string
+	if m.statusMsg != "" {
+		statusLine = successStyle.Render("  " + m.statusMsg)
+	}
+
+	divider := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", m.width))
+	help := handleStyle.Width(m.width).Render("l: like  r: repost  b: bookmark  c: comment  esc: back")
+	footer := statusBarStyle.Width(m.width).Render("")
+
+	main := lipgloss.JoinVertical(lipgloss.Left, divider, postBox, statusLine)
+	return lipgloss.JoinVertical(lipgloss.Left, main, help, footer)
+}
+
 func (m *Model) renderHelpBar() string {
-	keys := "j/k: scroll  h/l: tab  c: post  r: refresh  q: quit"
+	keys := "j/k: scroll  h/l: tab  enter: detail  c: post  r: refresh  q: quit"
 	return handleStyle.Width(m.width).Render(keys)
 }
 
@@ -368,8 +510,17 @@ func (m *Model) renderOverlay(base string) string {
 
 	help := handleStyle.Render("Ctrl+Enter: post  Esc: cancel")
 
+	title := "New Post"
+	if m.replyTo != nil {
+		replyName := m.replyTo.Author.DisplayName
+		if replyName == "" {
+			replyName = m.replyTo.Author.Handle
+		}
+		title = "Reply to " + replyName
+	}
+
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		composeTitleStyle.Render("New Post"),
+		composeTitleStyle.Render(title),
 		m.compose.View(),
 		lipgloss.JoinHorizontal(lipgloss.Top, countStr,
 			lipgloss.NewStyle().Render(strings.Repeat(" ", overlayW-20-lipgloss.Width(countStr))),
