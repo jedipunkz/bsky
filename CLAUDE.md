@@ -1,9 +1,19 @@
 # CLAUDE.md
 
+## Workflow (MANDATORY)
+
+After making **any** code changes, you MUST always follow these steps in order without exception:
+
+1. Run `golangci-lint run` and fix all errors before committing
+2. Commit the changes
+3. Push to remote
+4. Create a PR using the `gh` command
+
+**Do NOT stop at commit or push. Always create a PR.**
+
 ## Pull Request Guidelines
 
 - Write all PRs in **English**
-- After making changes, always: **commit → push → create PR using `gh` command**
 
 ### PR Body Structure
 
