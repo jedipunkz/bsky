@@ -88,10 +88,12 @@ func readPassword() (string, error) {
 
 	newState := oldState
 	newState.Lflag &^= syscall.ECHO
-	syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
+	_, _, _ = syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
 		syscall.TCSETS, uintptr(unsafe.Pointer(&newState)), 0, 0, 0)
-	defer syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
-		syscall.TCSETS, uintptr(unsafe.Pointer(&oldState)), 0, 0, 0)
+	defer func() {
+		_, _, _ = syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
+			syscall.TCSETS, uintptr(unsafe.Pointer(&oldState)), 0, 0, 0)
+	}()
 
 	reader := bufio.NewReader(os.Stdin)
 	pw, err := reader.ReadString('\n')
