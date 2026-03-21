@@ -54,7 +54,7 @@ func (c *Client) CreateSession(identifier, password string) (*SessionResp, error
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("login failed: %s", string(data))
@@ -77,7 +77,7 @@ func (c *Client) RefreshSession() error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("refresh failed: %s", string(data))
@@ -127,7 +127,7 @@ func (c *Client) GetTimeline(limit int) ([]FeedItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == 401 {
 		if err := c.RefreshSession(); err != nil {
@@ -153,7 +153,7 @@ func (c *Client) GetDiscoverFeed(limit int) ([]FeedItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == 401 {
 		if err := c.RefreshSession(); err != nil {
@@ -201,7 +201,7 @@ func (c *Client) CreatePost(text string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		data, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("post failed: %s", string(data))

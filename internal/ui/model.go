@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -35,8 +34,6 @@ type fetchedMsg struct {
 type postSentMsg struct {
 	err error
 }
-
-type tickMsg time.Time
 
 type Model struct {
 	client    *api.Client
