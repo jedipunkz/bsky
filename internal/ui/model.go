@@ -1207,7 +1207,6 @@ func (m *Model) renderUserProfile(base string) string {
 		)))
 	}
 	header := strings.Join(headerParts, "\n")
-	headerHeight := len(headerParts)
 
 	// Tab bar
 	var tabPosts, tabReplies string
@@ -1223,14 +1222,25 @@ func (m *Model) renderUserProfile(base string) string {
 	divider := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW))
 	help := handleStyle.Render("h/l: tab  j/k: scroll  q: back")
 
-	// border(2) + padding top+bottom(2) + header + blank(1) + tab(1) + divider(1) + help(1)
-	fixedLines := 4 + headerHeight + 1 + 1 + 1 + 1
-	postsHeight := overlayH - fixedLines
+	// Measure non-posts content height accurately
+	frameContent := lipgloss.JoinVertical(lipgloss.Left, header, "", tabBar, divider, help)
+	// border(2) + padding top+bottom(2)
+	postsHeight := overlayH - lipgloss.Height(frameContent) - 4
 	if postsHeight < 3 {
 		postsHeight = 3
 	}
 
 	postsContent := m.renderProfilePosts(innerW, postsHeight)
+
+	// Clip to exact postsHeight lines so overlay size stays fixed
+	postsLines := strings.Split(postsContent, "\n")
+	if len(postsLines) > postsHeight {
+		postsLines = postsLines[:postsHeight]
+	}
+	for len(postsLines) < postsHeight {
+		postsLines = append(postsLines, "")
+	}
+	postsContent = strings.Join(postsLines, "\n")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		header,
