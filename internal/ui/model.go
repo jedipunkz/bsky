@@ -219,12 +219,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "Liked!"
 			m.detailItem.Post.LikeCount++
 			m.detailItem.Post.Viewer.Like = msg.likeURI
+			m.syncDetailItemToFeed()
 		} else {
 			m.statusMsg = "Unliked!"
 			if m.detailItem.Post.LikeCount > 0 {
 				m.detailItem.Post.LikeCount--
 			}
 			m.detailItem.Post.Viewer.Like = ""
+			m.syncDetailItemToFeed()
 		}
 		return m, nil
 
@@ -235,12 +237,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "Reposted!"
 			m.detailItem.Post.RepostCount++
 			m.detailItem.Post.Viewer.Repost = msg.repostURI
+			m.syncDetailItemToFeed()
 		} else {
 			m.statusMsg = "Unreposted!"
 			if m.detailItem.Post.RepostCount > 0 {
 				m.detailItem.Post.RepostCount--
 			}
 			m.detailItem.Post.Viewer.Repost = ""
+			m.syncDetailItemToFeed()
 		}
 		return m, nil
 
@@ -332,6 +336,16 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) syncDetailItemToFeed() {
+	for t := tab(0); t < tabCount; t++ {
+		for i, item := range m.feeds[t] {
+			if item.Post.URI == m.detailItem.Post.URI {
+				m.feeds[t][i] = m.detailItem
+			}
+		}
+	}
 }
 
 func (m *Model) isBookmarked(uri string) bool {
