@@ -27,6 +27,15 @@ const (
 	stateCompose
 	stateDetail
 	stateSearch
+	stateUserProfile
+)
+
+type profileTabType int
+
+const (
+	profileTabPosts profileTabType = iota
+	profileTabReplies
+	profileTabCount
 )
 
 type fetchedMsg struct {
@@ -76,6 +85,17 @@ type appendSearchMsg struct {
 	err    error
 }
 
+type fetchedProfileMsg struct {
+	profile *api.Profile
+	err     error
+}
+
+type fetchedAuthorFeedMsg struct {
+	tabType profileTabType
+	items   []api.FeedItem
+	err     error
+}
+
 type Model struct {
 	client    *api.Client
 	width     int
@@ -108,6 +128,15 @@ type Model struct {
 	searchQuery       string
 
 	statusMsg string
+
+	profileActor       string
+	profileData        *api.Profile
+	profileActiveTab   profileTabType
+	profileFeeds       [profileTabCount][]api.FeedItem
+	profileCursors     [profileTabCount]int
+	profileLoading     bool
+	profileFeedLoading [profileTabCount]bool
+	profilePrevState   state
 }
 
 func New(client *api.Client, theme string) *Model {
@@ -232,6 +261,38 @@ func loadMoreSearch(client *api.Client, query, cursor string) tea.Cmd {
 	return func() tea.Msg {
 		items, nextCursor, err := client.SearchPosts(query, 25, cursor)
 		return appendSearchMsg{items: items, cursor: nextCursor, err: err}
+	}
+}
+
+func fetchProfile(client *api.Client, actor string) tea.Cmd {
+	return func() tea.Msg {
+		profile, err := client.GetProfile(actor)
+		return fetchedProfileMsg{profile: profile, err: err}
+	}
+}
+
+func fetchAuthorFeed(client *api.Client, actor string, tabType profileTabType) tea.Cmd {
+	return func() tea.Msg {
+		var filter string
+		if tabType == profileTabPosts {
+			filter = "posts_no_replies"
+		} else {
+			filter = "posts_with_replies"
+		}
+		items, _, err := client.GetAuthorFeed(actor, filter, 50, "")
+		if err != nil {
+			return fetchedAuthorFeedMsg{tabType: tabType, err: err}
+		}
+		if tabType == profileTabReplies {
+			var replies []api.FeedItem
+			for _, item := range items {
+				if item.Post.Record.Reply != nil {
+					replies = append(replies, item)
+				}
+			}
+			items = replies
+		}
+		return fetchedAuthorFeedMsg{tabType: tabType, items: items}
 	}
 }
 
@@ -363,6 +424,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = fmt.Sprintf("Search: %q (%d results)", m.searchQuery, len(m.searchResults))
 		}
 		return m, nil
+
+	case fetchedProfileMsg:
+		m.profileLoading = false
+		if msg.err == nil {
+			m.profileData = msg.profile
+		}
+		return m, nil
+
+	case fetchedAuthorFeedMsg:
+		m.profileFeedLoading[msg.tabType] = false
+		if msg.err == nil {
+			m.profileFeeds[msg.tabType] = msg.items
+		}
+		return m, nil
 	}
 
 	switch m.state {
@@ -372,6 +447,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateDetail(msg)
 	case stateSearch:
 		return m.updateSearch(msg)
+	case stateUserProfile:
+		return m.updateUserProfile(msg)
 	default:
 		return m.updateTimeline(msg)
 	}
@@ -516,9 +593,43 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor[m.activeTab] = len(feed) - 1
 				}
 			}
+
+		case "u":
+			m.statusMsg = ""
+			var author api.Author
+			if m.inSearch {
+				if len(m.searchResults) > 0 {
+					author = m.searchResults[m.searchCursor].Post.Author
+				}
+			} else {
+				feed := m.feeds[m.activeTab]
+				if len(feed) > 0 {
+					author = feed[m.cursor[m.activeTab]].Post.Author
+				}
+			}
+			if author.DID != "" {
+				return m.openUserProfile(author, stateTimeline)
+			}
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) openUserProfile(author api.Author, prevState state) (tea.Model, tea.Cmd) {
+	m.profileActor = author.Handle
+	m.profileData = nil
+	m.profileFeeds = [profileTabCount][]api.FeedItem{}
+	m.profileCursors = [profileTabCount]int{}
+	m.profileActiveTab = profileTabPosts
+	m.profileLoading = true
+	m.profileFeedLoading = [profileTabCount]bool{true, true}
+	m.profilePrevState = prevState
+	m.state = stateUserProfile
+	return m, tea.Batch(
+		fetchProfile(m.client, author.Handle),
+		fetchAuthorFeed(m.client, author.Handle, profileTabPosts),
+		fetchAuthorFeed(m.client, author.Handle, profileTabReplies),
+	)
 }
 
 func (m *Model) syncDetailItemToFeed() {
@@ -577,6 +688,9 @@ func (m *Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.composeErr = ""
 			m.compose.Reset()
 			m.compose.Focus()
+
+		case "u":
+			return m.openUserProfile(m.detailItem.Post.Author, stateDetail)
 		}
 	}
 	return m, nil
@@ -607,6 +721,42 @@ func (m *Model) updateCompose(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	m.compose, cmd = m.compose.Update(msg)
 	return m, cmd
+}
+
+func (m *Model) updateUserProfile(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "esc":
+			m.state = m.profilePrevState
+			m.statusMsg = ""
+		case "h":
+			if m.profileActiveTab > 0 {
+				m.profileActiveTab--
+			}
+		case "l":
+			if m.profileActiveTab < profileTabCount-1 {
+				m.profileActiveTab++
+			}
+		case "j":
+			feed := m.profileFeeds[m.profileActiveTab]
+			if m.profileCursors[m.profileActiveTab] < len(feed)-1 {
+				m.profileCursors[m.profileActiveTab]++
+			}
+		case "k":
+			if m.profileCursors[m.profileActiveTab] > 0 {
+				m.profileCursors[m.profileActiveTab]--
+			}
+		case "g":
+			m.profileCursors[m.profileActiveTab] = 0
+		case "G":
+			feed := m.profileFeeds[m.profileActiveTab]
+			if len(feed) > 0 {
+				m.profileCursors[m.profileActiveTab] = len(feed) - 1
+			}
+		}
+	}
+	return m, nil
 }
 
 func (m *Model) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -646,6 +796,11 @@ func (m *Model) View() string {
 		return base
 	}
 
+	if m.state == stateUserProfile && m.profilePrevState == stateDetail {
+		base := m.renderDetailFull()
+		return m.renderUserProfile(base)
+	}
+
 	header := m.renderTabs()
 	footer := m.renderStatusBar()
 	help := m.renderHelpBar()
@@ -660,6 +815,9 @@ func (m *Model) View() string {
 	}
 	if m.state == stateSearch {
 		return m.renderSearchOverlay(base)
+	}
+	if m.state == stateUserProfile {
+		return m.renderUserProfile(base)
 	}
 	return base
 }
@@ -874,7 +1032,7 @@ func (m *Model) renderDetailFull() string {
 	}
 
 	divider := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", m.width))
-	help := handleStyle.Width(m.width).Render("l: like/unlike  r: repost/unrepost  b: bookmark/unbookmark  c: comment  esc/q: back")
+	help := handleStyle.Width(m.width).Render("l: like/unlike  r: repost/unrepost  b: bookmark/unbookmark  c: comment  u: profile  esc/q: back")
 	footer := statusBarStyle.Width(m.width).Render("")
 
 	main := lipgloss.JoinVertical(lipgloss.Left, divider, postBox, statusLine)
@@ -884,9 +1042,9 @@ func (m *Model) renderDetailFull() string {
 func (m *Model) renderHelpBar() string {
 	var keys string
 	if m.inSearch {
-		keys = "j/k: scroll  enter: detail  s: new search  esc: clear search  q: quit"
+		keys = "j/k: scroll  enter: detail  u: profile  s: new search  esc: clear search  q: quit"
 	} else {
-		keys = "j/k: scroll  h/l: tab  enter: detail  c: post  s: search  r: refresh  q: quit"
+		keys = "j/k: scroll  h/l: tab  enter: detail  u: profile  c: post  s: search  r: refresh  q: quit"
 	}
 	return handleStyle.Width(m.width).Render(keys)
 }
@@ -976,6 +1134,138 @@ func (m *Model) renderOverlay(base string) string {
 		lipgloss.WithWhitespaceChars(" "),
 		lipgloss.WithWhitespaceForeground(lipgloss.Color("#000000")),
 	)
+}
+
+func (m *Model) renderUserProfile(base string) string {
+	overlayW := m.width * 4 / 5
+	if overlayW < 66 {
+		overlayW = 66
+	}
+	overlayH := m.height * 4 / 5
+	if overlayH < 20 {
+		overlayH = 20
+	}
+	innerW := overlayW - 6 // border(2) + padding(4)
+
+	// Profile header
+	var headerParts []string
+	if m.profileLoading {
+		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(colorMuted).Render("Loading profile..."))
+	} else if m.profileData == nil {
+		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(colorError).Render("Failed to load profile"))
+	} else {
+		p := m.profileData
+		name := p.DisplayName
+		if name == "" {
+			name = p.Handle
+		}
+		headerParts = append(headerParts, authorStyle.Render(name))
+		headerParts = append(headerParts, handleStyle.Render("@"+p.Handle))
+		headerParts = append(headerParts, statsStyle.Render(fmt.Sprintf(
+			"フォロワー: %d  フォロー: %d  投稿: %d",
+			p.FollowersCount, p.FollowsCount, p.PostsCount,
+		)))
+	}
+	header := strings.Join(headerParts, "\n")
+	headerHeight := len(headerParts)
+
+	// Tab bar
+	var tabPosts, tabReplies string
+	if m.profileActiveTab == profileTabPosts {
+		tabPosts = activeTabStyle.UnsetUnderline().Render("投稿")
+		tabReplies = tabStyle.Render("返信")
+	} else {
+		tabPosts = tabStyle.Render("投稿")
+		tabReplies = activeTabStyle.UnsetUnderline().Render("返信")
+	}
+	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabPosts, tabReplies)
+
+	divider := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW))
+	help := handleStyle.Render("h/l: tab  j/k: scroll  q: back")
+
+	// border(2) + padding top+bottom(2) + header + blank(1) + tab(1) + divider(1) + help(1)
+	fixedLines := 4 + headerHeight + 1 + 1 + 1 + 1
+	postsHeight := overlayH - fixedLines
+	if postsHeight < 3 {
+		postsHeight = 3
+	}
+
+	postsContent := m.renderProfilePosts(innerW, postsHeight)
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		"",
+		tabBar,
+		divider,
+		postsContent,
+		help,
+	)
+
+	overlay := overlayStyle.Width(innerW).Render(content)
+
+	return lipgloss.Place(m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		overlay,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("#000000")),
+	)
+}
+
+func (m *Model) renderProfilePosts(width, height int) string {
+	if m.profileFeedLoading[m.profileActiveTab] {
+		return lipgloss.NewStyle().Foreground(colorMuted).Render("Loading posts...")
+	}
+
+	feed := m.profileFeeds[m.profileActiveTab]
+	if len(feed) == 0 {
+		return lipgloss.NewStyle().Foreground(colorMuted).Render("No posts.")
+	}
+
+	cur := m.profileCursors[m.profileActiveTab]
+	linesPerPost := 4 // author + text + stats + border spacing
+	visiblePosts := height / linesPerPost
+	if visiblePosts < 1 {
+		visiblePosts = 1
+	}
+
+	start := 0
+	if cur >= visiblePosts {
+		start = cur - visiblePosts/2
+	}
+	end := start + visiblePosts + 1
+	if end > len(feed) {
+		end = len(feed)
+	}
+
+	var lines []string
+	for i := start; i < end; i++ {
+		post := feed[i].Post
+		selected := i == cur
+
+		name := post.Author.DisplayName
+		if name == "" {
+			name = post.Author.Handle
+		}
+		postHeader := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
+		body := wrapText(post.Record.Text, width-8)
+		stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
+			post.LikeCount, post.RepostCount, post.ReplyCount))
+
+		postContent := lipgloss.JoinVertical(lipgloss.Left,
+			postHeader,
+			textStyle.Render(body),
+			stats,
+		)
+
+		var rendered string
+		if selected {
+			rendered = selectedPostStyle.Width(width - 4).Render(postContent)
+		} else {
+			rendered = postStyle.Width(width - 4).Render(postContent)
+		}
+		lines = append(lines, rendered)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func filterSearchResults(items []api.FeedItem, query string) []api.FeedItem {

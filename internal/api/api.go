@@ -115,9 +115,30 @@ type Author struct {
 	DisplayName string `json:"displayName"`
 }
 
+type ReplyRef struct {
+	Root struct {
+		URI string `json:"uri"`
+		CID string `json:"cid"`
+	} `json:"root"`
+	Parent struct {
+		URI string `json:"uri"`
+		CID string `json:"cid"`
+	} `json:"parent"`
+}
+
 type PostRecord struct {
-	Text      string `json:"text"`
-	CreatedAt string `json:"createdAt"`
+	Text      string    `json:"text"`
+	CreatedAt string    `json:"createdAt"`
+	Reply     *ReplyRef `json:"reply,omitempty"`
+}
+
+type Profile struct {
+	DID            string `json:"did"`
+	Handle         string `json:"handle"`
+	DisplayName    string `json:"displayName"`
+	FollowersCount int    `json:"followersCount"`
+	FollowsCount   int    `json:"followsCount"`
+	PostsCount     int    `json:"postsCount"`
 }
 
 type PostViewer struct {
@@ -505,6 +526,62 @@ func (c *Client) SearchPosts(query string, limit int, cursor string) ([]FeedItem
 		items[i] = FeedItem{Post: p}
 	}
 	return items, sr.Cursor, nil
+}
+
+func (c *Client) GetProfile(actor string) (*Profile, error) {
+	u := fmt.Sprintf("%s/app.bsky.actor.getProfile?actor=%s", baseURL, url.QueryEscape(actor))
+	req, _ := http.NewRequest("GET", u, nil)
+	req.Header.Set("Authorization", "Bearer "+c.accessJWT)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == 401 || isExpiredToken(data) {
+		if err := c.RefreshSession(); err != nil {
+			return nil, fmt.Errorf("session expired")
+		}
+		return c.GetProfile(actor)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("get profile error: %s", string(data))
+	}
+	var p Profile
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+func (c *Client) GetAuthorFeed(actor, filter string, limit int, cursor string) ([]FeedItem, string, error) {
+	u := fmt.Sprintf("%s/app.bsky.feed.getAuthorFeed?actor=%s&filter=%s&limit=%d",
+		baseURL, url.QueryEscape(actor), url.QueryEscape(filter), limit)
+	if cursor != "" {
+		u += "&cursor=" + url.QueryEscape(cursor)
+	}
+	req, _ := http.NewRequest("GET", u, nil)
+	req.Header.Set("Authorization", "Bearer "+c.accessJWT)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == 401 || isExpiredToken(data) {
+		if err := c.RefreshSession(); err != nil {
+			return nil, "", fmt.Errorf("session expired")
+		}
+		return c.GetAuthorFeed(actor, filter, limit, cursor)
+	}
+	if resp.StatusCode != 200 {
+		return nil, "", fmt.Errorf("get author feed error: %s", string(data))
+	}
+	var tr timelineResp
+	if err := json.Unmarshal(data, &tr); err != nil {
+		return nil, "", err
+	}
+	return tr.Feed, tr.Cursor, nil
 }
 
 func (c *Client) CreateReply(text, parentURI, parentCID string) error {
