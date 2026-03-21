@@ -8,7 +8,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jedipunkz/bsky/internal/api"
-	"github.com/jedipunkz/bsky/internal/config"
 )
 
 type tab int
@@ -39,15 +38,20 @@ type postSentMsg struct {
 }
 
 type likeMsg struct {
-	err error
+	err     error
+	likeURI string
+	liked   bool
 }
 
 type repostMsg struct {
-	err error
+	err       error
+	repostURI string
+	reposted  bool
 }
 
 type bookmarkMsg struct {
-	err error
+	err        error
+	bookmarked bool
 }
 
 type Model struct {
@@ -93,7 +97,7 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		fetchFeed(m.client, tabHome),
 		fetchFeed(m.client, tabDiscover),
-		loadBookmarks(),
+		loadBookmarks(m.client),
 	)
 }
 
@@ -124,65 +128,51 @@ func sendPost(client *api.Client, text string, replyTo *api.Post) tea.Cmd {
 
 func likePost(client *api.Client, uri, cid string) tea.Cmd {
 	return func() tea.Msg {
-		err := client.Like(uri, cid)
-		return likeMsg{err: err}
+		likeURI, err := client.Like(uri, cid)
+		return likeMsg{err: err, likeURI: likeURI, liked: true}
+	}
+}
+
+func unlikePost(client *api.Client, likeURI string) tea.Cmd {
+	return func() tea.Msg {
+		err := client.Unlike(likeURI)
+		return likeMsg{err: err, liked: false}
 	}
 }
 
 func repostPost(client *api.Client, uri, cid string) tea.Cmd {
 	return func() tea.Msg {
-		err := client.Repost(uri, cid)
-		return repostMsg{err: err}
+		repostURI, err := client.Repost(uri, cid)
+		return repostMsg{err: err, repostURI: repostURI, reposted: true}
 	}
 }
 
-func bookmarkPost(item api.FeedItem) tea.Cmd {
+func unrepostPost(client *api.Client, repostURI string) tea.Cmd {
 	return func() tea.Msg {
-		posts, err := config.LoadBookmarks()
-		if err != nil {
-			return bookmarkMsg{err: err}
-		}
-		for _, p := range posts {
-			if p.URI == item.Post.URI {
-				return bookmarkMsg{err: nil}
-			}
-		}
-		posts = append(posts, config.BookmarkedPost{
-			URI:         item.Post.URI,
-			CID:         item.Post.CID,
-			Handle:      item.Post.Author.Handle,
-			DisplayName: item.Post.Author.DisplayName,
-			Text:        item.Post.Record.Text,
-			LikeCount:   item.Post.LikeCount,
-			RepostCount: item.Post.RepostCount,
-			ReplyCount:  item.Post.ReplyCount,
-		})
-		return bookmarkMsg{err: config.SaveBookmarks(posts)}
+		err := client.Unrepost(repostURI)
+		return repostMsg{err: err, reposted: false}
 	}
 }
 
-func loadBookmarks() tea.Cmd {
+func bookmarkPost(client *api.Client, item api.FeedItem) tea.Cmd {
 	return func() tea.Msg {
-		posts, err := config.LoadBookmarks()
+		err := client.CreateBookmark(item.Post.URI, item.Post.CID)
+		return bookmarkMsg{err: err, bookmarked: true}
+	}
+}
+
+func unbookmarkPost(client *api.Client, postURI string) tea.Cmd {
+	return func() tea.Msg {
+		err := client.DeleteBookmark(postURI)
+		return bookmarkMsg{err: err, bookmarked: false}
+	}
+}
+
+func loadBookmarks(client *api.Client) tea.Cmd {
+	return func() tea.Msg {
+		items, err := client.GetBookmarks(50)
 		if err != nil {
 			return fetchedMsg{tab: tabSaved, err: err}
-		}
-		items := make([]api.FeedItem, len(posts))
-		for i, p := range posts {
-			items[i] = api.FeedItem{
-				Post: api.Post{
-					URI: p.URI,
-					CID: p.CID,
-					Author: api.Author{
-						Handle:      p.Handle,
-						DisplayName: p.DisplayName,
-					},
-					Record:      api.PostRecord{Text: p.Text},
-					LikeCount:   p.LikeCount,
-					RepostCount: p.RepostCount,
-					ReplyCount:  p.ReplyCount,
-				},
-			}
 		}
 		return fetchedMsg{tab: tabSaved, items: items}
 	}
@@ -225,27 +215,48 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case likeMsg:
 		if msg.err != nil {
 			m.statusMsg = "Like failed: " + msg.err.Error()
-		} else {
+		} else if msg.liked {
 			m.statusMsg = "Liked!"
 			m.detailItem.Post.LikeCount++
+			m.detailItem.Post.Viewer.Like = msg.likeURI
+			m.syncDetailItemToFeed()
+		} else {
+			m.statusMsg = "Unliked!"
+			if m.detailItem.Post.LikeCount > 0 {
+				m.detailItem.Post.LikeCount--
+			}
+			m.detailItem.Post.Viewer.Like = ""
+			m.syncDetailItemToFeed()
 		}
 		return m, nil
 
 	case repostMsg:
 		if msg.err != nil {
 			m.statusMsg = "Repost failed: " + msg.err.Error()
-		} else {
+		} else if msg.reposted {
 			m.statusMsg = "Reposted!"
 			m.detailItem.Post.RepostCount++
+			m.detailItem.Post.Viewer.Repost = msg.repostURI
+			m.syncDetailItemToFeed()
+		} else {
+			m.statusMsg = "Unreposted!"
+			if m.detailItem.Post.RepostCount > 0 {
+				m.detailItem.Post.RepostCount--
+			}
+			m.detailItem.Post.Viewer.Repost = ""
+			m.syncDetailItemToFeed()
 		}
 		return m, nil
 
 	case bookmarkMsg:
 		if msg.err != nil {
 			m.statusMsg = "Bookmark failed: " + msg.err.Error()
-		} else {
+		} else if msg.bookmarked {
 			m.statusMsg = "Bookmarked!"
-			return m, loadBookmarks()
+			return m, loadBookmarks(m.client)
+		} else {
+			m.statusMsg = "Unbookmarked!"
+			return m, loadBookmarks(m.client)
 		}
 		return m, nil
 	}
@@ -310,7 +321,7 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading[m.activeTab] = true
 			m.cursor[m.activeTab] = 0
 			if m.activeTab == tabSaved {
-				return m, loadBookmarks()
+				return m, loadBookmarks(m.client)
 			}
 			return m, fetchFeed(m.client, m.activeTab)
 
@@ -327,24 +338,53 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) syncDetailItemToFeed() {
+	for t := tab(0); t < tabCount; t++ {
+		for i, item := range m.feeds[t] {
+			if item.Post.URI == m.detailItem.Post.URI {
+				m.feeds[t][i] = m.detailItem
+			}
+		}
+	}
+}
+
+func (m *Model) isBookmarked(uri string) bool {
+	for _, item := range m.feeds[tabSaved] {
+		if item.Post.URI == uri {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "esc":
+		case "esc", "q":
 			m.state = stateTimeline
 			m.statusMsg = ""
 
 		case "l":
 			post := m.detailItem.Post
+			if post.Viewer.Like != "" {
+				return m, unlikePost(m.client, post.Viewer.Like)
+			}
 			return m, likePost(m.client, post.URI, post.CID)
 
 		case "r":
 			post := m.detailItem.Post
+			if post.Viewer.Repost != "" {
+				return m, unrepostPost(m.client, post.Viewer.Repost)
+			}
 			return m, repostPost(m.client, post.URI, post.CID)
 
 		case "b":
-			return m, bookmarkPost(m.detailItem)
+			post := m.detailItem.Post
+			if m.isBookmarked(post.URI) {
+				return m, unbookmarkPost(m.client, post.URI)
+			}
+			return m, bookmarkPost(m.client, m.detailItem)
 
 		case "c":
 			p := m.detailItem.Post
@@ -515,8 +555,12 @@ func (m *Model) renderDetailFull() string {
 
 	header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
 	body := textStyle.Render(wrapText(post.Record.Text, m.width-8))
-	stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
-		post.LikeCount, post.RepostCount, post.ReplyCount))
+	bookmarkMark := ""
+	if m.isBookmarked(post.URI) {
+		bookmarkMark = "  ★"
+	}
+	stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d%s",
+		post.LikeCount, post.RepostCount, post.ReplyCount, bookmarkMark))
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		header,
@@ -534,7 +578,7 @@ func (m *Model) renderDetailFull() string {
 	}
 
 	divider := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", m.width))
-	help := handleStyle.Width(m.width).Render("l: like  r: repost  b: bookmark  c: comment  esc: back")
+	help := handleStyle.Width(m.width).Render("l: like/unlike  r: repost/unrepost  b: bookmark/unbookmark  c: comment  esc/q: back")
 	footer := statusBarStyle.Width(m.width).Render("")
 
 	main := lipgloss.JoinVertical(lipgloss.Left, divider, postBox, statusLine)
