@@ -276,7 +276,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.imgFetchErr[msg.url] = msg.err.Error()
 		} else if msg.img != nil {
 			delete(m.imgFetchErr, msg.url)
-			list := renderImageBlocks(msg.img, listImageMaxCols, listImageMaxRows)
+			list := renderImage(msg.img, listImageMaxCols, listImageMaxRows)
 			m.imageCache[msg.url] = &imageCacheEntry{raw: msg.img, list: list}
 		}
 		return m, nil
@@ -684,7 +684,7 @@ func (m *Model) renderDetailFull() string {
 		if entry, ok := m.imageCache[url]; ok && entry.raw != nil {
 			cols := m.width - 4
 			if cols > 0 {
-				imgLine = renderImageBlocks(entry.raw, cols, 40)
+				imgLine = renderImage(entry.raw, cols, 40)
 			}
 		} else if errMsg, hasErr := m.imgFetchErr[url]; hasErr {
 			imgLine = errorStyle.Render("  [🖼 " + errMsg + "]")

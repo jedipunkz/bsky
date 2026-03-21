@@ -1,13 +1,16 @@
 package ui
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"image"
 	"image/color"
 	_ "image/gif"
-	_ "image/jpeg"
+	"image/jpeg"
 	_ "image/png"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -21,6 +24,13 @@ const (
 )
 
 var imgHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+// iterm2Supported is true when the terminal implements the iTerm2 inline image protocol.
+// WezTerm, iTerm2, and Hyper all support it and produce true pixel-quality rendering.
+var iterm2Supported = func() bool {
+	tp := os.Getenv("TERM_PROGRAM")
+	return tp == "WezTerm" || tp == "iTerm.app" || tp == "Hyper"
+}()
 
 func downloadImage(url string) (image.Image, error) {
 	resp, err := imgHTTPClient.Get(url) //nolint:noctx
@@ -37,7 +47,6 @@ func downloadImage(url string) (image.Image, error) {
 
 // imageDims computes terminal cols/rows for an image while preserving its aspect ratio.
 // Terminal cells are ~2:1 (height:width), so displayed aspect ratio = cols / (rows * 2).
-// We solve for rows = imgH * cols / (imgW * 2) and clamp to maxCols/maxRows.
 func imageDims(src image.Image, maxCols, maxRows int) (cols, rows int) {
 	b := src.Bounds()
 	imgW := b.Max.X - b.Min.X
@@ -52,7 +61,6 @@ func imageDims(src image.Image, maxCols, maxRows int) (cols, rows int) {
 		rows = 1
 	}
 
-	// If rows exceeds maxRows, scale cols down proportionally.
 	if rows > maxRows {
 		rows = maxRows
 		cols = imgW * rows * 2 / imgH
@@ -66,9 +74,43 @@ func imageDims(src image.Image, maxCols, maxRows int) (cols, rows int) {
 	return cols, rows
 }
 
+// renderImage dispatches to iTerm2 inline protocol or half-block ANSI based on terminal support.
+func renderImage(src image.Image, maxCols, maxRows int) string {
+	if iterm2Supported {
+		return renderImageITerm2(src, maxCols, maxRows)
+	}
+	return renderImageBlocks(src, maxCols, maxRows)
+}
+
+// renderImageITerm2 sends the image using the iTerm2 inline image protocol.
+// The terminal renders it at native resolution — no pixel art.
+//
+// To keep bubbletea's line counter correct we:
+//  1. Emit `rows` newlines  → bubbletea counts these as N lines
+//  2. Emit CSI cursor-up N  → cursor moves back to the image start row
+//  3. Emit the iTerm2 seq   → terminal draws image, cursor advances N rows to end
+func renderImageITerm2(src image.Image, maxCols, maxRows int) string {
+	cols, rows := imageDims(src, maxCols, maxRows)
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, src, &jpeg.Options{Quality: 90}); err != nil {
+		// Fallback to half-blocks if encoding fails
+		return renderImageBlocks(src, maxCols, maxRows)
+	}
+	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	iterm2 := fmt.Sprintf(
+		"\033]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=0:%s\007",
+		cols, rows, b64,
+	)
+
+	return strings.Repeat("\n", rows) +
+		fmt.Sprintf("\033[%dA", rows) +
+		iterm2
+}
+
 // renderImageBlocks renders an image as half-block characters (▀) with ANSI 24-bit color.
-// Each terminal row shows 2 pixel rows: foreground = top pixel, background = bottom pixel.
-// Dimensions are derived from the image's aspect ratio within maxCols × maxRows.
+// Fallback for terminals that do not support the iTerm2 inline image protocol.
 func renderImageBlocks(src image.Image, maxCols, maxRows int) string {
 	if src == nil || maxCols <= 0 || maxRows <= 0 {
 		return ""
