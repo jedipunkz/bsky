@@ -474,34 +474,37 @@ type searchPostsResp struct {
 	Cursor string `json:"cursor"`
 }
 
-func (c *Client) SearchPosts(query string, limit int) ([]FeedItem, error) {
+func (c *Client) SearchPosts(query string, limit int, cursor string) ([]FeedItem, string, error) {
 	u := fmt.Sprintf("%s/app.bsky.feed.searchPosts?q=%s&limit=%d", baseURL, url.QueryEscape(query), limit)
+	if cursor != "" {
+		u += "&cursor=" + url.QueryEscape(cursor)
+	}
 	req, _ := http.NewRequest("GET", u, nil)
 	req.Header.Set("Authorization", "Bearer "+c.accessJWT)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == 401 || isExpiredToken(data) {
 		if err := c.RefreshSession(); err != nil {
-			return nil, fmt.Errorf("session expired")
+			return nil, "", fmt.Errorf("session expired")
 		}
-		return c.SearchPosts(query, limit)
+		return c.SearchPosts(query, limit, cursor)
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("search error: %s", string(data))
+		return nil, "", fmt.Errorf("search error: %s", string(data))
 	}
 	var sr searchPostsResp
 	if err := json.Unmarshal(data, &sr); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	items := make([]FeedItem, len(sr.Posts))
 	for i, p := range sr.Posts {
 		items[i] = FeedItem{Post: p}
 	}
-	return items, nil
+	return items, sr.Cursor, nil
 }
 
 func (c *Client) CreateReply(text, parentURI, parentCID string) error {

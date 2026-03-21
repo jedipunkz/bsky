@@ -65,8 +65,15 @@ type appendedMsg struct {
 }
 
 type searchMsg struct {
-	items []api.FeedItem
-	err   error
+	items  []api.FeedItem
+	cursor string
+	err    error
+}
+
+type appendSearchMsg struct {
+	items  []api.FeedItem
+	cursor string
+	err    error
 }
 
 type Model struct {
@@ -91,12 +98,14 @@ type Model struct {
 	composeErr  string
 	postSuccess bool
 
-	searchInput   textinput.Model
-	searchResults []api.FeedItem
-	searchCursor  int
-	searchLoading bool
-	inSearch      bool
-	searchQuery   string
+	searchInput       textinput.Model
+	searchResults     []api.FeedItem
+	searchCursor      int
+	searchLoading     bool
+	searchLoadingMore bool
+	searchNextCursor  string
+	inSearch          bool
+	searchQuery       string
 
 	statusMsg string
 }
@@ -214,8 +223,15 @@ func unbookmarkPost(client *api.Client, postURI string) tea.Cmd {
 
 func searchPosts(client *api.Client, query string) tea.Cmd {
 	return func() tea.Msg {
-		items, err := client.SearchPosts(query, 25)
-		return searchMsg{items: items, err: err}
+		items, cursor, err := client.SearchPosts(query, 25, "")
+		return searchMsg{items: items, cursor: cursor, err: err}
+	}
+}
+
+func loadMoreSearch(client *api.Client, query, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		items, nextCursor, err := client.SearchPosts(query, 25, cursor)
+		return appendSearchMsg{items: items, cursor: nextCursor, err: err}
 	}
 }
 
@@ -329,17 +345,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "Search failed: " + msg.err.Error()
 			m.inSearch = false
 		} else {
-			filtered := msg.items[:0]
-			query := strings.ToLower(m.searchQuery)
-			for _, item := range msg.items {
-				if strings.Contains(strings.ToLower(item.Post.Record.Text), query) {
-					filtered = append(filtered, item)
-				}
-			}
+			filtered := filterSearchResults(msg.items, m.searchQuery)
 			m.searchResults = filtered
+			m.searchNextCursor = msg.cursor
 			m.searchCursor = 0
 			m.inSearch = true
 			m.statusMsg = fmt.Sprintf("Search: %q (%d results)", m.searchQuery, len(filtered))
+		}
+		return m, nil
+
+	case appendSearchMsg:
+		m.searchLoadingMore = false
+		if msg.err == nil {
+			filtered := filterSearchResults(msg.items, m.searchQuery)
+			m.searchResults = append(m.searchResults, filtered...)
+			m.searchNextCursor = msg.cursor
+			m.statusMsg = fmt.Sprintf("Search: %q (%d results)", m.searchQuery, len(m.searchResults))
 		}
 		return m, nil
 	}
@@ -367,6 +388,8 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchResults = nil
 				m.searchCursor = 0
 				m.searchQuery = ""
+				m.searchNextCursor = ""
+				m.searchLoadingMore = false
 				m.statusMsg = ""
 			} else {
 				return m, tea.Quit
@@ -381,6 +404,8 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchResults = nil
 				m.searchCursor = 0
 				m.searchQuery = ""
+				m.searchNextCursor = ""
+				m.searchLoadingMore = false
 				m.statusMsg = ""
 			}
 
@@ -389,6 +414,9 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.inSearch {
 				if m.searchCursor < len(m.searchResults)-1 {
 					m.searchCursor++
+				} else if !m.searchLoadingMore && m.searchNextCursor != "" {
+					m.searchLoadingMore = true
+					return m, loadMoreSearch(m.client, m.searchQuery, m.searchNextCursor)
 				}
 			} else {
 				feed := m.feeds[m.activeTab]
@@ -715,7 +743,11 @@ func (m *Model) renderSearchResults(height int) string {
 		}
 		lines = append(lines, rendered)
 	}
-	return strings.Join(lines, "\n")
+	result := strings.Join(lines, "\n")
+	if m.searchLoadingMore {
+		result += "\n" + lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("Loading more...")
+	}
+	return result
 }
 
 func (m *Model) renderTimeline(height int) string {
@@ -939,6 +971,17 @@ func (m *Model) renderOverlay(base string) string {
 		lipgloss.WithWhitespaceChars(" "),
 		lipgloss.WithWhitespaceForeground(lipgloss.Color("#000000")),
 	)
+}
+
+func filterSearchResults(items []api.FeedItem, query string) []api.FeedItem {
+	q := strings.ToLower(query)
+	var filtered []api.FeedItem
+	for _, item := range items {
+		if strings.Contains(strings.ToLower(item.Post.Record.Text), q) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
 }
 
 func wrapText(text string, width int) string {
