@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -390,10 +389,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.imageError[msg.url] = msg.err.Error()
 		} else {
 			m.imageCache[msg.url] = msg.rendered
-			// Debug: dump rendered string to file so we can inspect it
-			_ = os.WriteFile("/tmp/bsky_img_debug.txt",
-				[]byte(fmt.Sprintf("len=%d iterm2=%v\n---\n%s", len(msg.rendered), iterm2Supported, msg.rendered)),
-				0o600)
 		}
 		return m, nil
 
@@ -1176,28 +1171,6 @@ func (m *Model) renderDetailFull() string {
 	// Build image line (placed between post and help bar so it stays on screen)
 	var imgLine string
 	embedImgs := post.Embed.EmbedImages()
-	var debugLine string
-	if post.Embed == nil {
-		debugLine = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("[dbg] embed=nil")
-	} else {
-		embedType := post.Embed.Type
-		imgCount := len(embedImgs)
-		var url0 string
-		if imgCount > 0 {
-			url0 = embedImgs[0].Fullsize
-			if url0 == "" {
-				url0 = embedImgs[0].Thumb
-			}
-		}
-		_, inCache := m.imageCache[url0]
-		errMsg, inErr := m.imageError[url0]
-		inLoading := m.imageLoading[url0]
-		cachedLen := len(m.imageCache[url0])
-		debugLine = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render(
-			fmt.Sprintf("[dbg] type=%s imgs=%d cache=%v(len=%d) err=%v(%s) loading=%v iterm2=%v",
-				embedType, imgCount, inCache, cachedLen, inErr, errMsg, inLoading, iterm2Supported),
-		)
-	}
 	if len(embedImgs) > 0 {
 		imgURL := embedImgs[0].Fullsize
 		if imgURL == "" {
@@ -1218,9 +1191,7 @@ func (m *Model) renderDetailFull() string {
 	}
 	main := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
-	// Append image outside lipgloss to avoid ANSI escape sequence mangling,
-	// then append help and footer below it.
-	result := main + "\n" + debugLine
+	result := main
 	if imgLine != "" {
 		result += "\n" + imgLine
 	}
