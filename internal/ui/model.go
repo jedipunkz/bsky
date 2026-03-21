@@ -93,6 +93,14 @@ type fetchedProfileMsg struct {
 type fetchedAuthorFeedMsg struct {
 	tabType profileTabType
 	items   []api.FeedItem
+	cursor  string
+	err     error
+}
+
+type appendedAuthorFeedMsg struct {
+	tabType profileTabType
+	items   []api.FeedItem
+	cursor  string
 	err     error
 }
 
@@ -129,14 +137,16 @@ type Model struct {
 
 	statusMsg string
 
-	profileActor       string
-	profileData        *api.Profile
-	profileActiveTab   profileTabType
-	profileFeeds       [profileTabCount][]api.FeedItem
-	profileCursors     [profileTabCount]int
-	profileLoading     bool
-	profileFeedLoading [profileTabCount]bool
-	profilePrevState   state
+	profileActor            string
+	profileData             *api.Profile
+	profileActiveTab        profileTabType
+	profileFeeds            [profileTabCount][]api.FeedItem
+	profileCursors          [profileTabCount]int
+	profileLoading          bool
+	profileFeedLoading      [profileTabCount]bool
+	profileFeedLoadingMore  [profileTabCount]bool
+	profileNextCursors      [profileTabCount]string
+	profilePrevState        state
 }
 
 func New(client *api.Client, theme string) *Model {
@@ -271,28 +281,43 @@ func fetchProfile(client *api.Client, actor string) tea.Cmd {
 	}
 }
 
+func authorFeedFilter(tabType profileTabType) string {
+	if tabType == profileTabPosts {
+		return "posts_no_replies"
+	}
+	return "posts_with_replies"
+}
+
+func filterReplies(items []api.FeedItem, tabType profileTabType) []api.FeedItem {
+	if tabType != profileTabReplies {
+		return items
+	}
+	var replies []api.FeedItem
+	for _, item := range items {
+		if item.Post.Record.Reply != nil {
+			replies = append(replies, item)
+		}
+	}
+	return replies
+}
+
 func fetchAuthorFeed(client *api.Client, actor string, tabType profileTabType) tea.Cmd {
 	return func() tea.Msg {
-		var filter string
-		if tabType == profileTabPosts {
-			filter = "posts_no_replies"
-		} else {
-			filter = "posts_with_replies"
-		}
-		items, _, err := client.GetAuthorFeed(actor, filter, 50, "")
+		items, cursor, err := client.GetAuthorFeed(actor, authorFeedFilter(tabType), 50, "")
 		if err != nil {
 			return fetchedAuthorFeedMsg{tabType: tabType, err: err}
 		}
-		if tabType == profileTabReplies {
-			var replies []api.FeedItem
-			for _, item := range items {
-				if item.Post.Record.Reply != nil {
-					replies = append(replies, item)
-				}
-			}
-			items = replies
+		return fetchedAuthorFeedMsg{tabType: tabType, items: filterReplies(items, tabType), cursor: cursor}
+	}
+}
+
+func loadMoreAuthorFeed(client *api.Client, actor string, tabType profileTabType, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		items, nextCursor, err := client.GetAuthorFeed(actor, authorFeedFilter(tabType), 50, cursor)
+		if err != nil {
+			return appendedAuthorFeedMsg{tabType: tabType, err: err}
 		}
-		return fetchedAuthorFeedMsg{tabType: tabType, items: items}
+		return appendedAuthorFeedMsg{tabType: tabType, items: filterReplies(items, tabType), cursor: nextCursor}
 	}
 }
 
@@ -436,6 +461,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.profileFeedLoading[msg.tabType] = false
 		if msg.err == nil {
 			m.profileFeeds[msg.tabType] = msg.items
+			m.profileNextCursors[msg.tabType] = msg.cursor
+		}
+		return m, nil
+
+	case appendedAuthorFeedMsg:
+		m.profileFeedLoadingMore[msg.tabType] = false
+		if msg.err == nil {
+			m.profileFeeds[msg.tabType] = append(m.profileFeeds[msg.tabType], msg.items...)
+			m.profileNextCursors[msg.tabType] = msg.cursor
 		}
 		return m, nil
 	}
@@ -620,6 +654,8 @@ func (m *Model) openUserProfile(author api.Author, prevState state) (tea.Model, 
 	m.profileData = nil
 	m.profileFeeds = [profileTabCount][]api.FeedItem{}
 	m.profileCursors = [profileTabCount]int{}
+	m.profileNextCursors = [profileTabCount]string{}
+	m.profileFeedLoadingMore = [profileTabCount]bool{}
 	m.profileActiveTab = profileTabPosts
 	m.profileLoading = true
 	m.profileFeedLoading = [profileTabCount]bool{true, true}
@@ -739,9 +775,13 @@ func (m *Model) updateUserProfile(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.profileActiveTab++
 			}
 		case "j":
-			feed := m.profileFeeds[m.profileActiveTab]
-			if m.profileCursors[m.profileActiveTab] < len(feed)-1 {
-				m.profileCursors[m.profileActiveTab]++
+			t := m.profileActiveTab
+			feed := m.profileFeeds[t]
+			if m.profileCursors[t] < len(feed)-1 {
+				m.profileCursors[t]++
+			} else if !m.profileFeedLoadingMore[t] && m.profileNextCursors[t] != "" {
+				m.profileFeedLoadingMore[t] = true
+				return m, loadMoreAuthorFeed(m.client, m.profileActor, t, m.profileNextCursors[t])
 			}
 		case "k":
 			if m.profileCursors[m.profileActiveTab] > 0 {
@@ -1265,7 +1305,11 @@ func (m *Model) renderProfilePosts(width, height int) string {
 		}
 		lines = append(lines, rendered)
 	}
-	return strings.Join(lines, "\n")
+	result := strings.Join(lines, "\n")
+	if m.profileFeedLoadingMore[m.profileActiveTab] {
+		result += "\n" + lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("Loading more...")
+	}
+	return result
 }
 
 func filterSearchResults(items []api.FeedItem, query string) []api.FeedItem {
