@@ -1172,12 +1172,15 @@ func (m *Model) renderDetailFull() string {
 	var imgLine string
 	if imgs := post.Embed.EmbedImages(); len(imgs) > 0 {
 		imgURL := imgs[0].Fullsize
+		if imgURL == "" {
+			imgURL = imgs[0].Thumb
+		}
 		if rendered, ok := m.imageCache[imgURL]; ok {
 			imgLine = rendered
 		} else if errMsg, hasErr := m.imageError[imgURL]; hasErr {
-			imgLine = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("[🖼 " + errMsg + "]")
+			imgLine = errorStyle.Padding(0, 2).Render("🖼 image load error: " + errMsg)
 		} else {
-			imgLine = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("[🖼 loading...]")
+			imgLine = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("🖼 loading...")
 		}
 	}
 
@@ -1203,6 +1206,12 @@ func (m *Model) fetchDetailImageCmd() tea.Cmd {
 		return nil
 	}
 	imgURL := imgs[0].Fullsize
+	if imgURL == "" {
+		imgURL = imgs[0].Thumb
+	}
+	if imgURL == "" {
+		return nil
+	}
 	if _, cached := m.imageCache[imgURL]; cached {
 		return nil
 	}
