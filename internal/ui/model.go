@@ -354,7 +354,18 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		m.postSuccess = false
 		switch msg.String() {
-		case "q", "ctrl+c":
+		case "q":
+			if m.inSearch {
+				m.inSearch = false
+				m.searchResults = nil
+				m.searchCursor = 0
+				m.searchQuery = ""
+				m.statusMsg = ""
+			} else {
+				return m, tea.Quit
+			}
+
+		case "ctrl+c":
 			return m, tea.Quit
 
 		case "esc":
