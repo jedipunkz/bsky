@@ -142,11 +142,9 @@ func applyTheme(name string) {
 
 	authorStyle = lipgloss.NewStyle().
 		Bold(true).
-		Foreground(colorPrimary)
-
-	selectedAuthorStyle = lipgloss.NewStyle().
-		Bold(true).
 		Foreground(colorSelectedAuthor)
+
+	selectedAuthorStyle = authorStyle
 
 	handleStyle = lipgloss.NewStyle().
 		Foreground(colorMuted)
