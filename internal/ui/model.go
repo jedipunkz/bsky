@@ -1014,26 +1014,26 @@ func (m *Model) fillFeedToHeight(feed []api.FeedItem, cur, height int) []string 
 		return strings.Join(ls[:n], "\n")
 	}
 
+	// strings.Join(lines, "\n") does NOT add extra lines:
+	// height(join([r1,r2],"\n")) == height(r1) + height(r2).
+	// So usedHeight is simply the sum of individual post heights.
+
 	var forward []string
 	usedHeight := 0
 	for i := cur; i < len(feed); i++ {
 		r := m.renderFeedItem(feed[i], i == cur)
 		h := lipgloss.Height(r)
-		sep := 0
-		if len(forward) > 0 {
-			sep = 1 // "\n" separator
-		}
-		remaining := height - usedHeight - sep
+		remaining := height - usedHeight
 		if remaining <= 0 {
 			break
 		}
 		if h > remaining {
-			// Show as many lines as fit, then stop
+			// Truncate to fill the rest of the screen, then stop
 			forward = append(forward, truncateToLines(r, remaining))
-			usedHeight += sep + remaining
+			usedHeight += remaining
 			break
 		}
-		usedHeight += sep + h
+		usedHeight += h
 		forward = append(forward, r)
 	}
 
@@ -1041,7 +1041,7 @@ func (m *Model) fillFeedToHeight(feed []api.FeedItem, cur, height int) []string 
 	var backward []string
 	for i := cur - 1; i >= 0; i-- {
 		r := m.renderFeedItem(feed[i], false)
-		h := lipgloss.Height(r) + 1 // +1 for "\n" separator
+		h := lipgloss.Height(r)
 		if usedHeight+h > height {
 			break
 		}
