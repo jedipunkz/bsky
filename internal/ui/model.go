@@ -1191,9 +1191,17 @@ func (m *Model) renderDetailFull() string {
 	}
 	main := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
+	// helpLine + footer occupy 2 rows at the bottom; leave room for them.
+	const fixedFooterRows = 2
+	availableForImage := m.height - lipgloss.Height(main) - fixedFooterRows
+
 	result := main
-	if imgLine != "" {
-		result += "\n" + imgLine
+	if imgLine != "" && availableForImage > 0 {
+		lines := strings.Split(imgLine, "\n")
+		if len(lines) > availableForImage {
+			lines = lines[:availableForImage]
+		}
+		result += "\n" + strings.Join(lines, "\n")
 	}
 	result += "\n" + help + "\n" + footer
 	return result
@@ -1225,9 +1233,10 @@ func (m *Model) fetchDetailImageCmd() tea.Cmd {
 	if maxCols < 20 {
 		maxCols = 20
 	}
-	maxRows := m.height/2 - 5
-	if maxRows < 10 {
-		maxRows = 10
+	// Reserve ~8 rows for the post box header, stats, divider, help, and footer.
+	maxRows := m.height - 8
+	if maxRows < 5 {
+		maxRows = 5
 	}
 	return fetchDetailImage(imgURL, maxCols, maxRows)
 }
