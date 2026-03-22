@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"image"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -11,6 +12,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jedipunkz/bsky/internal/api"
 )
+
+var urlRegex = regexp.MustCompile(`https?://[^\s]+`)
 
 type tab int
 
@@ -1012,7 +1015,7 @@ func (m *Model) renderSearchResults(height int) string {
 			name = post.Author.Handle
 		}
 		header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
-		body := wrapText(post.Record.Text, m.width-8)
+		body := renderTextWithURLs(post.Record.Text, m.width-8)
 
 		imgIcon := ""
 		if embedImgs := post.Embed.EmbedImages(); len(embedImgs) > 0 {
@@ -1023,7 +1026,7 @@ func (m *Model) renderSearchResults(height int) string {
 
 		content := lipgloss.JoinVertical(lipgloss.Left,
 			header,
-			textStyle.Render(body),
+			body,
 			stats,
 		)
 
@@ -1098,7 +1101,7 @@ func (m *Model) renderTimeline(height int) string {
 			name = post.Author.Handle
 		}
 		header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
-		body := wrapText(post.Record.Text, m.width-8)
+		body := renderTextWithURLs(post.Record.Text, m.width-8)
 
 		imgIcon := ""
 		if embedImgs := post.Embed.EmbedImages(); len(embedImgs) > 0 {
@@ -1109,7 +1112,7 @@ func (m *Model) renderTimeline(height int) string {
 
 		content := lipgloss.JoinVertical(lipgloss.Left,
 			header,
-			textStyle.Render(body),
+			body,
 			stats,
 		)
 
@@ -1142,7 +1145,7 @@ func (m *Model) renderDetailFull() string {
 	}
 
 	header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
-	body := textStyle.Render(wrapText(post.Record.Text, m.width-8))
+	body := renderTextWithURLs(post.Record.Text, m.width-8)
 
 	// Stats and help are rendered outside the postBox so the image can sit between them.
 	bookmarkMark := ""
@@ -1466,13 +1469,13 @@ func (m *Model) renderProfilePosts(width, height int) string {
 			name = post.Author.Handle
 		}
 		postHeader := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
-		body := wrapText(post.Record.Text, width-8)
+		body := renderTextWithURLs(post.Record.Text, width-8)
 		stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
 			post.LikeCount, post.RepostCount, post.ReplyCount))
 
 		postContent := lipgloss.JoinVertical(lipgloss.Left,
 			postHeader,
-			textStyle.Render(body),
+			body,
 			stats,
 		)
 
@@ -1500,6 +1503,34 @@ func filterSearchResults(items []api.FeedItem, query string) []api.FeedItem {
 		}
 	}
 	return filtered
+}
+
+// renderTextWithURLs wraps text and renders URLs as OSC 8 terminal hyperlinks
+// (underlined, primary color). Shift+click opens the URL in the browser.
+func renderTextWithURLs(text string, width int) string {
+	wrapped := wrapText(text, width)
+	matches := urlRegex.FindAllStringIndex(wrapped, -1)
+	if len(matches) == 0 {
+		return textStyle.Render(wrapped)
+	}
+
+	var b strings.Builder
+	last := 0
+	for _, m := range matches {
+		start, end := m[0], m[1]
+		if start > last {
+			b.WriteString(textStyle.Render(wrapped[last:start]))
+		}
+		rawURL := wrapped[start:end]
+		styled := linkStyle.Render(rawURL)
+		// OSC 8 hyperlink: \033]8;;URL\a + visible text + \033]8;;\a
+		b.WriteString("\033]8;;" + rawURL + "\a" + styled + "\033]8;;\a")
+		last = end
+	}
+	if last < len(wrapped) {
+		b.WriteString(textStyle.Render(wrapped[last:]))
+	}
+	return b.String()
 }
 
 func wrapText(text string, width int) string {
