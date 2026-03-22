@@ -76,20 +76,23 @@ var (
 	colorError    lipgloss.Color
 	colorSuccess  lipgloss.Color
 
-	tabStyle          lipgloss.Style
-	activeTabStyle    lipgloss.Style
-	postStyle         lipgloss.Style
-	selectedPostStyle lipgloss.Style
-	authorStyle       lipgloss.Style
-	handleStyle       lipgloss.Style
-	textStyle         lipgloss.Style
-	linkStyle         lipgloss.Style
-	statsStyle        lipgloss.Style
-	statusBarStyle    lipgloss.Style
-	overlayStyle      lipgloss.Style
-	composeTitleStyle lipgloss.Style
-	errorStyle        lipgloss.Style
-	successStyle      lipgloss.Style
+	tabStyle                lipgloss.Style
+	activeTabStyle          lipgloss.Style
+	postStyle               lipgloss.Style
+	selectedPostStyle       lipgloss.Style
+	authorStyle             lipgloss.Style
+	handleStyle             lipgloss.Style
+	selectedHandleStyle     lipgloss.Style
+	textStyle               lipgloss.Style
+	selectedTextStyle       lipgloss.Style
+	linkStyle               lipgloss.Style
+	statsStyle              lipgloss.Style
+	selectedStatsStyle      lipgloss.Style
+	statusBarStyle          lipgloss.Style
+	overlayStyle            lipgloss.Style
+	composeTitleStyle       lipgloss.Style
+	errorStyle              lipgloss.Style
+	successStyle            lipgloss.Style
 )
 
 func applyTheme(name string) {
@@ -136,8 +139,14 @@ func applyTheme(name string) {
 	handleStyle = lipgloss.NewStyle().
 		Foreground(colorMuted)
 
+	selectedHandleStyle = lipgloss.NewStyle().
+		Foreground(colorSubtext)
+
 	textStyle = lipgloss.NewStyle().
 		Foreground(colorText)
+
+	selectedTextStyle = lipgloss.NewStyle().
+		Foreground(colorSelected)
 
 	linkStyle = lipgloss.NewStyle().
 		Foreground(colorPrimary).
@@ -145,6 +154,9 @@ func applyTheme(name string) {
 
 	statsStyle = lipgloss.NewStyle().
 		Foreground(colorMuted)
+
+	selectedStatsStyle = lipgloss.NewStyle().
+		Foreground(colorSubtext)
 
 	statusBarStyle = lipgloss.NewStyle().
 		Background(t.StatusBG).

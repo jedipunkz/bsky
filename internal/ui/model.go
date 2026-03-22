@@ -978,15 +978,27 @@ func (m *Model) renderFeedItem(item api.FeedItem, selected bool) string {
 	if name == "" {
 		name = post.Author.Handle
 	}
-	header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
-	body := renderTextWithURLs(post.Record.Text, m.width-8)
 
-	imgIcon := ""
-	if embedImgs := post.Embed.EmbedImages(); len(embedImgs) > 0 {
-		imgIcon = "  " + lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("[🖼 %d]", len(embedImgs)))
+	var header, body, stats string
+	if selected {
+		header = authorStyle.Render(name) + " " + selectedHandleStyle.Render("@"+post.Author.Handle)
+		body = renderTextWithURLsStyled(post.Record.Text, m.width-8, selectedTextStyle)
+		imgIcon := ""
+		if embedImgs := post.Embed.EmbedImages(); len(embedImgs) > 0 {
+			imgIcon = "  " + lipgloss.NewStyle().Foreground(colorSubtext).Render(fmt.Sprintf("[🖼 %d]", len(embedImgs)))
+		}
+		stats = selectedStatsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
+			post.LikeCount, post.RepostCount, post.ReplyCount)) + imgIcon
+	} else {
+		header = authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
+		body = renderTextWithURLs(post.Record.Text, m.width-8)
+		imgIcon := ""
+		if embedImgs := post.Embed.EmbedImages(); len(embedImgs) > 0 {
+			imgIcon = "  " + lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("[🖼 %d]", len(embedImgs)))
+		}
+		stats = statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
+			post.LikeCount, post.RepostCount, post.ReplyCount)) + imgIcon
 	}
-	stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
-		post.LikeCount, post.RepostCount, post.ReplyCount)) + imgIcon
 
 	content := lipgloss.JoinVertical(lipgloss.Left, header, body, stats)
 
@@ -1491,10 +1503,15 @@ func filterSearchResults(items []api.FeedItem, query string) []api.FeedItem {
 // renderTextWithURLs wraps text and renders URLs as OSC 8 terminal hyperlinks
 // (underlined, primary color). Shift+click opens the URL in the browser.
 func renderTextWithURLs(text string, width int) string {
+	return renderTextWithURLsStyled(text, width, textStyle)
+}
+
+// renderTextWithURLsStyled is like renderTextWithURLs but uses a custom text style.
+func renderTextWithURLsStyled(text string, width int, ts lipgloss.Style) string {
 	wrapped := wrapText(text, width)
 	matches := urlRegex.FindAllStringIndex(wrapped, -1)
 	if len(matches) == 0 {
-		return textStyle.Render(wrapped)
+		return ts.Render(wrapped)
 	}
 
 	var b strings.Builder
@@ -1502,7 +1519,7 @@ func renderTextWithURLs(text string, width int) string {
 	for _, m := range matches {
 		start, end := m[0], m[1]
 		if start > last {
-			b.WriteString(textStyle.Render(wrapped[last:start]))
+			b.WriteString(ts.Render(wrapped[last:start]))
 		}
 		rawURL := wrapped[start:end]
 		styled := linkStyle.Render(rawURL)
@@ -1511,7 +1528,7 @@ func renderTextWithURLs(text string, width int) string {
 		last = end
 	}
 	if last < len(wrapped) {
-		b.WriteString(textStyle.Render(wrapped[last:]))
+		b.WriteString(ts.Render(wrapped[last:]))
 	}
 	return b.String()
 }
