@@ -83,6 +83,7 @@ var (
 	authorStyle       lipgloss.Style
 	handleStyle       lipgloss.Style
 	textStyle         lipgloss.Style
+	linkStyle         lipgloss.Style
 	statsStyle        lipgloss.Style
 	statusBarStyle    lipgloss.Style
 	overlayStyle      lipgloss.Style
@@ -137,6 +138,10 @@ func applyTheme(name string) {
 
 	textStyle = lipgloss.NewStyle().
 		Foreground(colorText)
+
+	linkStyle = lipgloss.NewStyle().
+		Foreground(colorPrimary).
+		Underline(true)
 
 	statsStyle = lipgloss.NewStyle().
 		Foreground(colorMuted)
