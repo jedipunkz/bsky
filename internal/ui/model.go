@@ -933,7 +933,7 @@ func (m *Model) View() string {
 	help := m.renderHelpBar()
 	contentHeight := m.height - lipgloss.Height(header) - lipgloss.Height(footer) - lipgloss.Height(help)
 
-	timeline := m.renderTimeline(contentHeight)
+	timeline := lipgloss.NewStyle().Height(contentHeight).Render(m.renderTimeline(contentHeight))
 
 	base := lipgloss.JoinVertical(lipgloss.Left, header, timeline, help, footer)
 
@@ -971,6 +971,93 @@ func (m *Model) renderTabs() string {
 	return lipgloss.JoinVertical(lipgloss.Left, line, divider)
 }
 
+// renderFeedItem renders a single feed item as a styled post box.
+func (m *Model) renderFeedItem(item api.FeedItem, selected bool) string {
+	post := item.Post
+	name := post.Author.DisplayName
+	if name == "" {
+		name = post.Author.Handle
+	}
+	header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
+	body := renderTextWithURLs(post.Record.Text, m.width-8)
+
+	imgIcon := ""
+	if embedImgs := post.Embed.EmbedImages(); len(embedImgs) > 0 {
+		imgIcon = "  " + lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("[🖼 %d]", len(embedImgs)))
+	}
+	stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
+		post.LikeCount, post.RepostCount, post.ReplyCount)) + imgIcon
+
+	content := lipgloss.JoinVertical(lipgloss.Left, header, body, stats)
+
+	if selected {
+		return selectedPostStyle.Width(m.width - 4).Render(content)
+	}
+	return postStyle.Width(m.width - 4).Render(content)
+}
+
+// fillFeedToHeight renders feed items around cur, expanding to fill height lines.
+// Posts that don't fully fit are truncated so the terminal is always filled.
+func (m *Model) fillFeedToHeight(feed []api.FeedItem, cur, height int) []string {
+	if len(feed) == 0 {
+		return nil
+	}
+
+	truncateToLines := func(s string, n int) string {
+		if n <= 0 {
+			return ""
+		}
+		ls := strings.Split(s, "\n")
+		if len(ls) <= n {
+			return s
+		}
+		return strings.Join(ls[:n], "\n")
+	}
+
+	// strings.Join(lines, "\n") does NOT add extra lines:
+	// height(join([r1,r2],"\n")) == height(r1) + height(r2).
+	// So usedHeight is simply the sum of individual post heights.
+
+	var forward []string
+	usedHeight := 0
+	for i := cur; i < len(feed); i++ {
+		r := m.renderFeedItem(feed[i], i == cur)
+		h := lipgloss.Height(r)
+		remaining := height - usedHeight
+		if remaining <= 0 {
+			break
+		}
+		if h > remaining {
+			// Truncate to fill the rest of the screen, then stop
+			forward = append(forward, truncateToLines(r, remaining))
+			usedHeight += remaining
+			break
+		}
+		usedHeight += h
+		forward = append(forward, r)
+	}
+
+	// Fill remaining space by expanding backward from cursor-1
+	var backward []string
+	for i := cur - 1; i >= 0; i-- {
+		r := m.renderFeedItem(feed[i], false)
+		h := lipgloss.Height(r)
+		if usedHeight+h > height {
+			break
+		}
+		usedHeight += h
+		backward = append(backward, r)
+	}
+
+	// Combine: backward entries are in reverse order, prepend them
+	lines := make([]string, 0, len(backward)+len(forward))
+	for j := len(backward) - 1; j >= 0; j-- {
+		lines = append(lines, backward[j])
+	}
+	lines = append(lines, forward...)
+	return lines
+}
+
 func (m *Model) renderSearchResults(height int) string {
 	if m.searchLoading {
 		return lipgloss.NewStyle().
@@ -987,57 +1074,7 @@ func (m *Model) renderSearchResults(height int) string {
 			Render("No results found.")
 	}
 
-	cur := m.searchCursor
-	visibleLines := height - 2
-	if visibleLines < 1 {
-		visibleLines = 1
-	}
-	postsPerPage := visibleLines / 5
-	if postsPerPage < 1 {
-		postsPerPage = 1
-	}
-	start := 0
-	if cur >= postsPerPage {
-		start = cur - postsPerPage/2
-	}
-	end := start + postsPerPage + 1
-	if end > len(feed) {
-		end = len(feed)
-	}
-
-	var lines []string
-	for i := start; i < end; i++ {
-		post := feed[i].Post
-		selected := i == cur
-
-		name := post.Author.DisplayName
-		if name == "" {
-			name = post.Author.Handle
-		}
-		header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
-		body := renderTextWithURLs(post.Record.Text, m.width-8)
-
-		imgIcon := ""
-		if embedImgs := post.Embed.EmbedImages(); len(embedImgs) > 0 {
-			imgIcon = "  " + lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("[🖼 %d]", len(embedImgs)))
-		}
-		stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
-			post.LikeCount, post.RepostCount, post.ReplyCount)) + imgIcon
-
-		content := lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			body,
-			stats,
-		)
-
-		var rendered string
-		if selected {
-			rendered = selectedPostStyle.Width(m.width - 4).Render(content)
-		} else {
-			rendered = postStyle.Width(m.width - 4).Render(content)
-		}
-		lines = append(lines, rendered)
-	}
+	lines := m.fillFeedToHeight(feed, m.searchCursor, height)
 	result := strings.Join(lines, "\n")
 	if m.searchLoadingMore {
 		result += "\n" + lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("Loading more...")
@@ -1070,61 +1107,7 @@ func (m *Model) renderTimeline(height int) string {
 	}
 
 	cur := m.cursor[t]
-	// Calculate visible range
-	visibleLines := height - 2
-	if visibleLines < 1 {
-		visibleLines = 1
-	}
-
-	// Estimate lines per post (~4 lines each)
-	postsPerPage := visibleLines / 5
-	if postsPerPage < 1 {
-		postsPerPage = 1
-	}
-
-	start := 0
-	if cur >= postsPerPage {
-		start = cur - postsPerPage/2
-	}
-	end := start + postsPerPage + 1
-	if end > len(feed) {
-		end = len(feed)
-	}
-
-	var lines []string
-	for i := start; i < end; i++ {
-		post := feed[i].Post
-		selected := i == cur
-
-		name := post.Author.DisplayName
-		if name == "" {
-			name = post.Author.Handle
-		}
-		header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
-		body := renderTextWithURLs(post.Record.Text, m.width-8)
-
-		imgIcon := ""
-		if embedImgs := post.Embed.EmbedImages(); len(embedImgs) > 0 {
-			imgIcon = "  " + lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("[🖼 %d]", len(embedImgs)))
-		}
-		stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
-			post.LikeCount, post.RepostCount, post.ReplyCount)) + imgIcon
-
-		content := lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			body,
-			stats,
-		)
-
-		var rendered string
-		if selected {
-			rendered = selectedPostStyle.Width(m.width - 4).Render(content)
-		} else {
-			rendered = postStyle.Width(m.width - 4).Render(content)
-		}
-		lines = append(lines, rendered)
-	}
-
+	lines := m.fillFeedToHeight(feed, cur, height)
 	result := strings.Join(lines, "\n")
 	if m.loadingMore[t] {
 		loadingLine := lipgloss.NewStyle().
