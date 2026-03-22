@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/color"
@@ -8,9 +9,12 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/eliukblau/pixterm/pkg/ansimage"
+	"github.com/mattn/go-sixel"
 	"golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 )
@@ -59,14 +63,62 @@ func imageDims(src image.Image, maxCols, maxRows int) (cols, rows int) {
 	return cols, rows
 }
 
+// supportsSixel reports whether the current terminal supports the Sixel graphics protocol.
+// Checks known terminal programs and TERM environment variable, with a manual override via BSKY_SIXEL=1.
+func supportsSixel() bool {
+	if os.Getenv("BSKY_SIXEL") == "1" {
+		return true
+	}
+	switch os.Getenv("TERM_PROGRAM") {
+	case "WezTerm", "iTerm.app":
+		return true
+	}
+	return strings.Contains(os.Getenv("TERM"), "sixel")
+}
+
 // renderImage renders an image for display in the terminal.
-// Uses half-block ANSI characters which work reliably with BubbleTea's renderer.
+// Uses Sixel protocol when the terminal supports it (detail view only),
+// otherwise falls back to pixterm's block-character rendering.
 func renderImage(src image.Image, maxCols, maxRows int) string {
-	return renderImageBlocks(src, maxCols, maxRows)
+	if supportsSixel() {
+		if s := renderImageSixel(src, maxCols, maxRows); s != "" {
+			return s
+		}
+	}
+	return renderImagePixterm(src, maxCols, maxRows)
+}
+
+// renderImageSixel encodes the image using the Sixel graphics protocol.
+// The image is scaled to fit within the given column/row budget using approximate
+// cell pixel dimensions (8×16 px per cell).
+func renderImageSixel(src image.Image, maxCols, maxRows int) string {
+	cols, rows := imageDims(src, maxCols, maxRows)
+	pixW := cols * 8
+	pixH := rows * 16
+	dst := image.NewRGBA(image.Rect(0, 0, pixW, pixH))
+	draw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
+
+	var buf bytes.Buffer
+	enc := sixel.NewEncoder(&buf)
+	if err := enc.Encode(dst); err != nil {
+		return ""
+	}
+	return buf.String()
+}
+
+// renderImagePixterm renders an image using pixterm's ansimage block-character renderer.
+// This provides high-quality dithered output on terminals that do not support Sixel.
+func renderImagePixterm(src image.Image, maxCols, maxRows int) string {
+	bg := color.RGBA{A: 255}
+	pimg, err := ansimage.NewScaledFromImage(src, maxRows, maxCols, bg, ansimage.ScaleModeResize, ansimage.NoDithering)
+	if err != nil {
+		return renderImageBlocks(src, maxCols, maxRows)
+	}
+	return pimg.Render()
 }
 
 // renderImageBlocks renders an image as half-block characters (▀) with ANSI 24-bit color.
-// Fallback for terminals that do not support the iTerm2 inline image protocol.
+// Used as the last-resort fallback.
 func renderImageBlocks(src image.Image, maxCols, maxRows int) string {
 	if src == nil || maxCols <= 0 || maxRows <= 0 {
 		return ""
