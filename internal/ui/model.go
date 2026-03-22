@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -46,9 +47,9 @@ type fetchedMsg struct {
 }
 
 type imageFetchedMsg struct {
-	url      string
-	rendered string
-	err      error
+	url string
+	img image.Image
+	err error
 }
 
 type postSentMsg struct {
@@ -160,9 +161,9 @@ type Model struct {
 	profileNextCursors      [profileTabCount]string
 	profilePrevState        state
 
-	imageCache   map[string]string // URL -> pre-rendered image string
-	imageLoading map[string]bool   // URL -> loading in progress
-	imageError   map[string]string // URL -> error message
+	imageCache   map[string]image.Image // URL -> decoded image (rendered at display time)
+	imageLoading map[string]bool        // URL -> loading in progress
+	imageError   map[string]string      // URL -> error message
 }
 
 func New(client *api.Client, theme string) *Model {
@@ -183,7 +184,7 @@ func New(client *api.Client, theme string) *Model {
 		client:       client,
 		compose:      ta,
 		searchInput:  si,
-		imageCache:   make(map[string]string),
+		imageCache:   make(map[string]image.Image),
 		imageLoading: make(map[string]bool),
 		imageError:   make(map[string]string),
 	}
@@ -364,14 +365,13 @@ func loadBookmarks(client *api.Client) tea.Cmd {
 	}
 }
 
-func fetchDetailImage(url string, maxCols, maxRows int) tea.Cmd {
+func fetchDetailImage(url string) tea.Cmd {
 	return func() tea.Msg {
 		img, err := downloadImage(url)
 		if err != nil {
 			return imageFetchedMsg{url: url, err: err}
 		}
-		rendered := renderImage(img, maxCols, maxRows)
-		return imageFetchedMsg{url: url, rendered: rendered}
+		return imageFetchedMsg{url: url, img: img}
 	}
 }
 
@@ -388,7 +388,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.imageError[msg.url] = msg.err.Error()
 		} else {
-			m.imageCache[msg.url] = msg.rendered
+			m.imageCache[msg.url] = msg.img
 		}
 		return m, nil
 
@@ -1185,6 +1185,12 @@ func (m *Model) renderDetailFull() string {
 
 	// Build image section if an embed image exists, padded to exactly availableForImage rows
 	// so that stats/help/footer always appear at a stable position below the image area.
+	maxCols := m.width - 4
+	if maxCols < 20 {
+		maxCols = 20
+	}
+
+	// Build image block: always exactly availableForImage rows (availableForImage-1 \n chars).
 	var imgBlock string
 	embedImgs := post.Embed.EmbedImages()
 	if len(embedImgs) > 0 && availableForImage > 0 {
@@ -1192,21 +1198,9 @@ func (m *Model) renderDetailFull() string {
 		if imgURL == "" {
 			imgURL = embedImgs[0].Thumb
 		}
-		if rendered, ok := m.imageCache[imgURL]; ok {
-			lines := strings.Split(rendered, "\n")
-			// Trim trailing empty lines produced by pixterm's trailing \n.
-			for len(lines) > 0 && lines[len(lines)-1] == "" {
-				lines = lines[:len(lines)-1]
-			}
-			if len(lines) > availableForImage {
-				lines = lines[:availableForImage]
-			}
-			imgBlock = strings.Join(lines, "\n")
-			// Pad with blank lines so the block is exactly availableForImage rows.
-			pad := availableForImage - len(lines)
-			if pad > 0 {
-				imgBlock += strings.Repeat("\n", pad)
-			}
+		if img, ok := m.imageCache[imgURL]; ok {
+			// Render at display time so size always matches current available space.
+			imgBlock = renderImageForView(img, maxCols, availableForImage)
 		} else if errMsg, hasErr := m.imageError[imgURL]; hasErr {
 			imgBlock = errorStyle.Padding(0, 2).Render("🖼 image load error: " + errMsg)
 			imgBlock += strings.Repeat("\n", availableForImage-1)
@@ -1248,16 +1242,7 @@ func (m *Model) fetchDetailImageCmd() tea.Cmd {
 		return nil
 	}
 	m.imageLoading[imgURL] = true
-	maxCols := m.width - 4
-	if maxCols < 20 {
-		maxCols = 20
-	}
-	// Reserve ~8 rows for the post box header, stats, divider, help, and footer.
-	maxRows := m.height - 8
-	if maxRows < 5 {
-		maxRows = 5
-	}
-	return fetchDetailImage(imgURL, maxCols, maxRows)
+	return fetchDetailImage(imgURL)
 }
 
 func (m *Model) renderHelpBar() string {
