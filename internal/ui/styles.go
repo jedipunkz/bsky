@@ -72,14 +72,15 @@ var themes = map[string]themeColors{
 }
 
 var (
-	colorPrimary  lipgloss.Color
-	colorMuted    lipgloss.Color
-	colorBorder   lipgloss.Color
-	colorSelected lipgloss.Color
-	colorText     lipgloss.Color
-	colorSubtext  lipgloss.Color
-	colorError    lipgloss.Color
-	colorSuccess  lipgloss.Color
+	colorPrimary     lipgloss.Color
+	colorMuted       lipgloss.Color
+	colorBorder      lipgloss.Color
+	colorSelected    lipgloss.Color
+	colorSelectedBG  lipgloss.Color
+	colorText        lipgloss.Color
+	colorSubtext     lipgloss.Color
+	colorError       lipgloss.Color
+	colorSuccess     lipgloss.Color
 
 	tabStyle          lipgloss.Style
 	activeTabStyle    lipgloss.Style
@@ -106,6 +107,7 @@ func applyTheme(name string) {
 	colorMuted = t.Muted
 	colorBorder = t.Border
 	colorSelected = t.Selected
+	colorSelectedBG = t.SelectedBG
 	colorText = t.Text
 	colorSubtext = t.Subtext
 	colorError = t.Error

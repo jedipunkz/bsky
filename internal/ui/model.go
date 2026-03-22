@@ -1010,26 +1010,22 @@ func (m *Model) renderSearchResults(height int) string {
 		if name == "" {
 			name = post.Author.Handle
 		}
-		header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
 		body := wrapText(post.Record.Text, m.width-8)
 
 		imgIcon := ""
 		if embedImgs := post.Embed.EmbedImages(); len(embedImgs) > 0 {
 			imgIcon = "  " + lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("[🖼 %d]", len(embedImgs)))
 		}
-		stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
-			post.LikeCount, post.RepostCount, post.ReplyCount)) + imgIcon
-
-		content := lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			textStyle.Render(body),
-			stats,
-		)
+		statsText := fmt.Sprintf("♥ %d  ↺ %d  ✦ %d", post.LikeCount, post.RepostCount, post.ReplyCount)
 
 		var rendered string
 		if selected {
+			content := buildSelectedContent(name, post.Author.Handle, body, statsText, imgIcon, m.width-4)
 			rendered = selectedPostStyle.Width(m.width - 4).Render(content)
 		} else {
+			header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
+			stats := statsStyle.Render(statsText) + imgIcon
+			content := lipgloss.JoinVertical(lipgloss.Left, header, textStyle.Render(body), stats)
 			rendered = postStyle.Width(m.width - 4).Render(content)
 		}
 		lines = append(lines, rendered)
@@ -1096,26 +1092,22 @@ func (m *Model) renderTimeline(height int) string {
 		if name == "" {
 			name = post.Author.Handle
 		}
-		header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
 		body := wrapText(post.Record.Text, m.width-8)
 
 		imgIcon := ""
 		if embedImgs := post.Embed.EmbedImages(); len(embedImgs) > 0 {
 			imgIcon = "  " + lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("[🖼 %d]", len(embedImgs)))
 		}
-		stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
-			post.LikeCount, post.RepostCount, post.ReplyCount)) + imgIcon
-
-		content := lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			textStyle.Render(body),
-			stats,
-		)
+		statsText := fmt.Sprintf("♥ %d  ↺ %d  ✦ %d", post.LikeCount, post.RepostCount, post.ReplyCount)
 
 		var rendered string
 		if selected {
+			content := buildSelectedContent(name, post.Author.Handle, body, statsText, imgIcon, m.width-4)
 			rendered = selectedPostStyle.Width(m.width - 4).Render(content)
 		} else {
+			header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
+			stats := statsStyle.Render(statsText) + imgIcon
+			content := lipgloss.JoinVertical(lipgloss.Left, header, textStyle.Render(body), stats)
 			rendered = postStyle.Width(m.width - 4).Render(content)
 		}
 		lines = append(lines, rendered)
@@ -1452,21 +1444,17 @@ func (m *Model) renderProfilePosts(width, height int) string {
 		if name == "" {
 			name = post.Author.Handle
 		}
-		postHeader := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
 		body := wrapText(post.Record.Text, width-8)
-		stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
-			post.LikeCount, post.RepostCount, post.ReplyCount))
-
-		postContent := lipgloss.JoinVertical(lipgloss.Left,
-			postHeader,
-			textStyle.Render(body),
-			stats,
-		)
+		statsText := fmt.Sprintf("♥ %d  ↺ %d  ✦ %d", post.LikeCount, post.RepostCount, post.ReplyCount)
 
 		var rendered string
 		if selected {
+			postContent := buildSelectedContent(name, post.Author.Handle, body, statsText, "", width-4)
 			rendered = selectedPostStyle.Width(width - 4).Render(postContent)
 		} else {
+			postHeader := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
+			stats := statsStyle.Render(statsText)
+			postContent := lipgloss.JoinVertical(lipgloss.Left, postHeader, textStyle.Render(body), stats)
 			rendered = postStyle.Width(width - 4).Render(postContent)
 		}
 		lines = append(lines, rendered)
@@ -1487,6 +1475,42 @@ func filterSearchResults(items []api.FeedItem, query string) []api.FeedItem {
 		}
 	}
 	return filtered
+}
+
+// buildSelectedContent renders post content with background color applied to each
+// element, so the full width of the selected post row is consistently colored.
+func buildSelectedContent(name, handle, body, statsText, imgIcon string, innerWidth int) string {
+	bg := colorSelectedBG
+	bgStyle := lipgloss.NewStyle().Background(bg)
+
+	fillLine := func(s string) string {
+		if pad := innerWidth - lipgloss.Width(s); pad > 0 {
+			return s + bgStyle.Render(strings.Repeat(" ", pad))
+		}
+		return s
+	}
+
+	header := fillLine(
+		authorStyle.Background(bg).Render(name) +
+			bgStyle.Render(" ") +
+			handleStyle.Background(bg).Render("@"+handle),
+	)
+
+	var bodyLines []string
+	for _, l := range strings.Split(body, "\n") {
+		bodyLines = append(bodyLines, fillLine(textStyle.Background(bg).Render(l)))
+	}
+
+	statsRendered := statsStyle.Background(bg).Render(statsText)
+	if imgIcon != "" {
+		statsRendered += imgIcon
+	}
+	stats := fillLine(statsRendered)
+
+	parts := []string{header}
+	parts = append(parts, bodyLines...)
+	parts = append(parts, stats)
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func wrapText(text string, width int) string {
