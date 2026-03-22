@@ -87,6 +87,7 @@ var (
 	postStyle               lipgloss.Style
 	selectedPostStyle       lipgloss.Style
 	authorStyle             lipgloss.Style
+	selectedAuthorStyle     lipgloss.Style
 	handleStyle             lipgloss.Style
 	selectedHandleStyle     lipgloss.Style
 	textStyle               lipgloss.Style
@@ -143,6 +144,10 @@ func applyTheme(name string) {
 		Bold(true).
 		Foreground(colorPrimary)
 
+	selectedAuthorStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorSelectedAuthor)
+
 	handleStyle = lipgloss.NewStyle().
 		Foreground(colorMuted)
 
@@ -153,7 +158,7 @@ func applyTheme(name string) {
 		Foreground(colorText)
 
 	selectedTextStyle = lipgloss.NewStyle().
-		Foreground(colorSelectedAuthor)
+		Foreground(colorSelected)
 
 	linkStyle = lipgloss.NewStyle().
 		Foreground(colorPrimary).

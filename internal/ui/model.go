@@ -981,7 +981,7 @@ func (m *Model) renderFeedItem(item api.FeedItem, selected bool) string {
 
 	var header, body, stats string
 	if selected {
-		header = authorStyle.Render(name) + " " + selectedHandleStyle.Render("@"+post.Author.Handle)
+		header = selectedAuthorStyle.Render(name) + " " + selectedHandleStyle.Render("@"+post.Author.Handle)
 		body = renderTextWithURLsStyled(post.Record.Text, m.width-8, selectedTextStyle)
 		imgIcon := ""
 		if embedImgs := post.Embed.EmbedImages(); len(embedImgs) > 0 {
