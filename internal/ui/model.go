@@ -769,6 +769,7 @@ func (m *Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc", "q":
 			m.state = stateTimeline
 			m.statusMsg = ""
+			return m, tea.ClearScreen
 
 		case "l":
 			post := m.detailItem.Post
@@ -1178,33 +1179,48 @@ func (m *Model) renderDetailFull() string {
 	// Fixed rows at the bottom: stats (1) + help (1) + footer (1).
 	const fixedBottomRows = 3
 	availableForImage := m.height - lipgloss.Height(top) - fixedBottomRows
+	if availableForImage < 0 {
+		availableForImage = 0
+	}
 
-	// Build image section if an embed image exists.
+	// Build image section if an embed image exists, padded to exactly availableForImage rows
+	// so that stats/help/footer always appear at a stable position below the image area.
+	var imgBlock string
 	embedImgs := post.Embed.EmbedImages()
-	var imgSection string
-	if len(embedImgs) > 0 {
+	if len(embedImgs) > 0 && availableForImage > 0 {
 		imgURL := embedImgs[0].Fullsize
 		if imgURL == "" {
 			imgURL = embedImgs[0].Thumb
 		}
 		if rendered, ok := m.imageCache[imgURL]; ok {
-			if availableForImage > 0 {
-				lines := strings.Split(rendered, "\n")
-				if len(lines) > availableForImage {
-					lines = lines[:availableForImage]
-				}
-				imgSection = strings.Join(lines, "\n")
+			lines := strings.Split(rendered, "\n")
+			// Trim trailing empty lines produced by pixterm's trailing \n.
+			for len(lines) > 0 && lines[len(lines)-1] == "" {
+				lines = lines[:len(lines)-1]
+			}
+			if len(lines) > availableForImage {
+				lines = lines[:availableForImage]
+			}
+			imgBlock = strings.Join(lines, "\n")
+			// Pad with blank lines so the block is exactly availableForImage rows.
+			pad := availableForImage - len(lines)
+			if pad > 0 {
+				imgBlock += strings.Repeat("\n", pad)
 			}
 		} else if errMsg, hasErr := m.imageError[imgURL]; hasErr {
-			imgSection = errorStyle.Padding(0, 2).Render("🖼 image load error: " + errMsg)
+			imgBlock = errorStyle.Padding(0, 2).Render("🖼 image load error: " + errMsg)
+			imgBlock += strings.Repeat("\n", availableForImage-1)
 		} else {
-			imgSection = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("🖼 loading...")
+			imgBlock = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("🖼 loading...")
+			imgBlock += strings.Repeat("\n", availableForImage-1)
 		}
+	} else if availableForImage > 0 {
+		imgBlock = strings.Repeat("\n", availableForImage-1)
 	}
 
 	result := top
-	if imgSection != "" {
-		result += "\n" + imgSection
+	if imgBlock != "" {
+		result += "\n" + imgBlock
 	}
 	result += "\n" + stats + "\n" + help + "\n" + footer
 	return result

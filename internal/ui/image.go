@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bytes"
 	"fmt"
 	"image"
 	"image/color"
@@ -9,12 +8,10 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/eliukblau/pixterm/pkg/ansimage"
-	"github.com/mattn/go-sixel"
 	"golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 )
@@ -63,54 +60,27 @@ func imageDims(src image.Image, maxCols, maxRows int) (cols, rows int) {
 	return cols, rows
 }
 
-// supportsSixel reports whether the current terminal supports the Sixel graphics protocol.
-// Checks known terminal programs and TERM environment variable, with a manual override via BSKY_SIXEL=1.
-func supportsSixel() bool {
-	if os.Getenv("BSKY_SIXEL") == "1" {
-		return true
-	}
-	switch os.Getenv("TERM_PROGRAM") {
-	case "WezTerm", "iTerm.app":
-		return true
-	}
-	return strings.Contains(os.Getenv("TERM"), "sixel")
-}
-
-// renderImage renders an image for display in the terminal.
-// Uses Sixel protocol when the terminal supports it (detail view only),
-// otherwise falls back to pixterm's block-character rendering.
+// renderImage renders an image as block characters for display inside BubbleTea's view.
+//
+// Sixel protocol is intentionally NOT used here: Sixel DCS sequences contain no ASCII
+// newlines, so BubbleTea's line-based renderer cannot track their height, which causes
+// subsequent text (stats, help bar) to overlap the image and leaves Sixel pixel artifacts
+// when the view is replaced.  Block-character rendering has real \n characters that
+// BubbleTea can count reliably.
 func renderImage(src image.Image, maxCols, maxRows int) string {
-	if supportsSixel() {
-		if s := renderImageSixel(src, maxCols, maxRows); s != "" {
-			return s
-		}
-	}
 	return renderImagePixterm(src, maxCols, maxRows)
 }
 
-// renderImageSixel encodes the image using the Sixel graphics protocol.
-// The image is scaled to fit within the given column/row budget using approximate
-// cell pixel dimensions (8×16 px per cell).
-func renderImageSixel(src image.Image, maxCols, maxRows int) string {
-	cols, rows := imageDims(src, maxCols, maxRows)
-	pixW := cols * 8
-	pixH := rows * 16
-	dst := image.NewRGBA(image.Rect(0, 0, pixW, pixH))
-	draw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
-
-	var buf bytes.Buffer
-	enc := sixel.NewEncoder(&buf)
-	if err := enc.Encode(dst); err != nil {
-		return ""
-	}
-	return buf.String()
-}
-
-// renderImagePixterm renders an image using pixterm's ansimage block-character renderer.
-// This provides high-quality dithered output on terminals that do not support Sixel.
+// renderImagePixterm renders an image using pixterm's ansimage half-block renderer.
+// pixterm's NoDithering mode treats its `y` parameter as pixel height (2 px → 1 terminal
+// row), so we pass maxRows*2 to obtain exactly maxRows terminal rows of output.
+// If pixterm fails (e.g. odd pixel height), we fall back to renderImageBlocks.
 func renderImagePixterm(src image.Image, maxCols, maxRows int) string {
 	bg := color.RGBA{A: 255}
-	pimg, err := ansimage.NewScaledFromImage(src, maxRows, maxCols, bg, ansimage.ScaleModeResize, ansimage.NoDithering)
+	// NoDithering: each terminal row represents 2 pixel rows (▀ half-block).
+	// Pass maxRows*2 as the pixel height so we get maxRows terminal rows of output.
+	pixelH := maxRows * 2
+	pimg, err := ansimage.NewScaledFromImage(src, pixelH, maxCols, bg, ansimage.ScaleModeResize, ansimage.NoDithering)
 	if err != nil {
 		return renderImageBlocks(src, maxCols, maxRows)
 	}
