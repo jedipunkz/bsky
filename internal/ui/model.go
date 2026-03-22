@@ -997,32 +997,48 @@ func (m *Model) renderFeedItem(item api.FeedItem, selected bool) string {
 }
 
 // fillFeedToHeight renders feed items around cur, expanding to fill height lines.
+// Posts that don't fully fit are truncated so the terminal is always filled.
 func (m *Model) fillFeedToHeight(feed []api.FeedItem, cur, height int) []string {
 	if len(feed) == 0 {
 		return nil
 	}
 
-	// Render forward from cursor until height is exhausted
-	type entry struct {
-		rendered string
+	truncateToLines := func(s string, n int) string {
+		if n <= 0 {
+			return ""
+		}
+		ls := strings.Split(s, "\n")
+		if len(ls) <= n {
+			return s
+		}
+		return strings.Join(ls[:n], "\n")
 	}
-	var forward []entry
+
+	var forward []string
 	usedHeight := 0
 	for i := cur; i < len(feed); i++ {
 		r := m.renderFeedItem(feed[i], i == cur)
 		h := lipgloss.Height(r)
+		sep := 0
 		if len(forward) > 0 {
-			h++ // account for "\n" separator
+			sep = 1 // "\n" separator
 		}
-		if usedHeight+h > height {
+		remaining := height - usedHeight - sep
+		if remaining <= 0 {
 			break
 		}
-		usedHeight += h
-		forward = append(forward, entry{r})
+		if h > remaining {
+			// Show as many lines as fit, then stop
+			forward = append(forward, truncateToLines(r, remaining))
+			usedHeight += sep + remaining
+			break
+		}
+		usedHeight += sep + h
+		forward = append(forward, r)
 	}
 
 	// Fill remaining space by expanding backward from cursor-1
-	var backward []entry
+	var backward []string
 	for i := cur - 1; i >= 0; i-- {
 		r := m.renderFeedItem(feed[i], false)
 		h := lipgloss.Height(r) + 1 // +1 for "\n" separator
@@ -1030,17 +1046,15 @@ func (m *Model) fillFeedToHeight(feed []api.FeedItem, cur, height int) []string 
 			break
 		}
 		usedHeight += h
-		backward = append(backward, entry{r})
+		backward = append(backward, r)
 	}
 
 	// Combine: backward entries are in reverse order, prepend them
 	lines := make([]string, 0, len(backward)+len(forward))
 	for j := len(backward) - 1; j >= 0; j-- {
-		lines = append(lines, backward[j].rendered)
+		lines = append(lines, backward[j])
 	}
-	for _, e := range forward {
-		lines = append(lines, e.rendered)
-	}
+	lines = append(lines, forward...)
 	return lines
 }
 
