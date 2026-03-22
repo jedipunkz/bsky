@@ -1020,7 +1020,7 @@ func (m *Model) renderSearchResults(height int) string {
 
 		var rendered string
 		if selected {
-			content := buildSelectedContent(name, post.Author.Handle, body, statsText, imgIcon, m.width-4)
+			content := buildSelectedContent(name, post.Author.Handle, body, statsText, imgIcon)
 			rendered = selectedPostStyle.Width(m.width - 4).Render(content)
 		} else {
 			header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
@@ -1102,7 +1102,7 @@ func (m *Model) renderTimeline(height int) string {
 
 		var rendered string
 		if selected {
-			content := buildSelectedContent(name, post.Author.Handle, body, statsText, imgIcon, m.width-4)
+			content := buildSelectedContent(name, post.Author.Handle, body, statsText, imgIcon)
 			rendered = selectedPostStyle.Width(m.width - 4).Render(content)
 		} else {
 			header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
@@ -1449,7 +1449,7 @@ func (m *Model) renderProfilePosts(width, height int) string {
 
 		var rendered string
 		if selected {
-			postContent := buildSelectedContent(name, post.Author.Handle, body, statsText, "", width-4)
+			postContent := buildSelectedContent(name, post.Author.Handle, body, statsText, "")
 			rendered = selectedPostStyle.Width(width - 4).Render(postContent)
 		} else {
 			postHeader := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
@@ -1477,39 +1477,29 @@ func filterSearchResults(items []api.FeedItem, query string) []api.FeedItem {
 	return filtered
 }
 
-// buildSelectedContent renders post content with background color applied to each
-// element, so the full width of the selected post row is consistently colored.
-func buildSelectedContent(name, handle, body, statsText, imgIcon string, innerWidth int) string {
+// buildSelectedContent renders post content with background color propagated to
+// each inner element. Width padding is left to the outer selectedPostStyle.Render().
+func buildSelectedContent(name, handle, body, statsText, imgIcon string) string {
 	bg := colorSelectedBG
 	bgStyle := lipgloss.NewStyle().Background(bg)
 
-	fillLine := func(s string) string {
-		if pad := innerWidth - lipgloss.Width(s); pad > 0 {
-			return s + bgStyle.Render(strings.Repeat(" ", pad))
-		}
-		return s
-	}
-
-	header := fillLine(
-		authorStyle.Background(bg).Render(name) +
-			bgStyle.Render(" ") +
-			handleStyle.Background(bg).Render("@"+handle),
-	)
+	header := authorStyle.Background(bg).Render(name) +
+		bgStyle.Render(" ") +
+		handleStyle.Background(bg).Render("@"+handle)
 
 	var bodyLines []string
 	for _, l := range strings.Split(body, "\n") {
-		bodyLines = append(bodyLines, fillLine(textStyle.Background(bg).Render(l)))
+		bodyLines = append(bodyLines, textStyle.Background(bg).Render(l))
 	}
 
 	statsRendered := statsStyle.Background(bg).Render(statsText)
 	if imgIcon != "" {
 		statsRendered += imgIcon
 	}
-	stats := fillLine(statsRendered)
 
 	parts := []string{header}
 	parts = append(parts, bodyLines...)
-	parts = append(parts, stats)
+	parts = append(parts, statsRendered)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
