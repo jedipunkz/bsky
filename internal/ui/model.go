@@ -933,7 +933,7 @@ func (m *Model) View() string {
 	help := m.renderHelpBar()
 	contentHeight := m.height - lipgloss.Height(header) - lipgloss.Height(footer) - lipgloss.Height(help)
 
-	timeline := m.renderTimeline(contentHeight)
+	timeline := lipgloss.NewStyle().Height(contentHeight).Render(m.renderTimeline(contentHeight))
 
 	base := lipgloss.JoinVertical(lipgloss.Left, header, timeline, help, footer)
 
