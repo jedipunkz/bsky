@@ -22,7 +22,7 @@ var themes = map[string]themeColors{
 		Muted:          "#565f89",
 		Border:         "#414868",
 		Selected:       "#7aa2f7",
-		SelectedAuthor: "#bb9af7",
+		SelectedAuthor: "#ff9e64",
 		Text:           "#c0caf5",
 		Subtext:        "#9aa5ce",
 		Error:          "#f7768e",
@@ -35,7 +35,7 @@ var themes = map[string]themeColors{
 		Muted:          "#727169",
 		Border:         "#54546d",
 		Selected:       "#7e9cd8",
-		SelectedAuthor: "#957fb8",
+		SelectedAuthor: "#ffa066",
 		Text:           "#dcd7ba",
 		Subtext:        "#938aa9",
 		Error:          "#e82424",
@@ -48,7 +48,7 @@ var themes = map[string]themeColors{
 		Muted:          "#586e75",
 		Border:         "#073642",
 		Selected:       "#268bd2",
-		SelectedAuthor: "#2aa198",
+		SelectedAuthor: "#cb4b16",
 		Text:           "#839496",
 		Subtext:        "#657b83",
 		Error:          "#dc322f",
@@ -61,7 +61,7 @@ var themes = map[string]themeColors{
 		Muted:          "#6c7086",
 		Border:         "#45475a",
 		Selected:       "#89b4fa",
-		SelectedAuthor: "#cba6f7",
+		SelectedAuthor: "#fab387",
 		Text:           "#cdd6f4",
 		Subtext:        "#a6adc8",
 		Error:          "#f38ba8",
@@ -87,7 +87,6 @@ var (
 	postStyle               lipgloss.Style
 	selectedPostStyle       lipgloss.Style
 	authorStyle             lipgloss.Style
-	selectedAuthorStyle     lipgloss.Style
 	handleStyle             lipgloss.Style
 	selectedHandleStyle     lipgloss.Style
 	textStyle               lipgloss.Style
@@ -144,10 +143,6 @@ func applyTheme(name string) {
 		Bold(true).
 		Foreground(colorPrimary)
 
-	selectedAuthorStyle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(colorSelectedAuthor)
-
 	handleStyle = lipgloss.NewStyle().
 		Foreground(colorMuted)
 
@@ -158,7 +153,7 @@ func applyTheme(name string) {
 		Foreground(colorText)
 
 	selectedTextStyle = lipgloss.NewStyle().
-		Foreground(colorSelected)
+		Foreground(colorSelectedAuthor)
 
 	linkStyle = lipgloss.NewStyle().
 		Foreground(colorPrimary).
