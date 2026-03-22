@@ -1142,6 +1142,8 @@ func (m *Model) renderDetailFull() string {
 
 	header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
 	body := textStyle.Render(wrapText(post.Record.Text, m.width-8))
+
+	// Stats and help are rendered outside the postBox so the image can sit between them.
 	bookmarkMark := ""
 	if m.isBookmarked(post.URI) {
 		bookmarkMark = "  ★"
@@ -1153,8 +1155,6 @@ func (m *Model) renderDetailFull() string {
 		header,
 		"",
 		body,
-		"",
-		stats,
 	)
 
 	postBox := selectedPostStyle.Width(m.width - 4).Render(content)
@@ -1168,42 +1168,45 @@ func (m *Model) renderDetailFull() string {
 	help := handleStyle.Width(m.width).Render("l: like/unlike  r: repost/unrepost  b: bookmark/unbookmark  c: comment  u: profile  esc/q: back")
 	footer := statusBarStyle.Width(m.width).Render("")
 
-	// Build image line (placed between post and help bar so it stays on screen)
-	var imgLine string
+	// Build the top section (everything above the image).
+	topParts := []string{divider, postBox}
+	if statusLine != "" {
+		topParts = append(topParts, statusLine)
+	}
+	top := lipgloss.JoinVertical(lipgloss.Left, topParts...)
+
+	// Fixed rows at the bottom: stats (1) + help (1) + footer (1).
+	const fixedBottomRows = 3
+	availableForImage := m.height - lipgloss.Height(top) - fixedBottomRows
+
+	// Build image section if an embed image exists.
 	embedImgs := post.Embed.EmbedImages()
+	var imgSection string
 	if len(embedImgs) > 0 {
 		imgURL := embedImgs[0].Fullsize
 		if imgURL == "" {
 			imgURL = embedImgs[0].Thumb
 		}
 		if rendered, ok := m.imageCache[imgURL]; ok {
-			imgLine = rendered
+			if availableForImage > 0 {
+				lines := strings.Split(rendered, "\n")
+				if len(lines) > availableForImage {
+					lines = lines[:availableForImage]
+				}
+				imgSection = strings.Join(lines, "\n")
+			}
 		} else if errMsg, hasErr := m.imageError[imgURL]; hasErr {
-			imgLine = errorStyle.Padding(0, 2).Render("🖼 image load error: " + errMsg)
+			imgSection = errorStyle.Padding(0, 2).Render("🖼 image load error: " + errMsg)
 		} else {
-			imgLine = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("🖼 loading...")
+			imgSection = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("🖼 loading...")
 		}
 	}
 
-	parts := []string{divider, postBox}
-	if statusLine != "" {
-		parts = append(parts, statusLine)
+	result := top
+	if imgSection != "" {
+		result += "\n" + imgSection
 	}
-	main := lipgloss.JoinVertical(lipgloss.Left, parts...)
-
-	// helpLine + footer occupy 2 rows at the bottom; leave room for them.
-	const fixedFooterRows = 2
-	availableForImage := m.height - lipgloss.Height(main) - fixedFooterRows
-
-	result := main
-	if imgLine != "" && availableForImage > 0 {
-		lines := strings.Split(imgLine, "\n")
-		if len(lines) > availableForImage {
-			lines = lines[:availableForImage]
-		}
-		result += "\n" + strings.Join(lines, "\n")
-	}
-	result += "\n" + help + "\n" + footer
+	result += "\n" + stats + "\n" + help + "\n" + footer
 	return result
 }
 
