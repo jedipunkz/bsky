@@ -3,84 +3,91 @@ package ui
 import "github.com/charmbracelet/lipgloss"
 
 type themeColors struct {
-	Primary   lipgloss.Color
-	Muted     lipgloss.Color
-	Border    lipgloss.Color
-	Selected  lipgloss.Color
-	Text      lipgloss.Color
-	Subtext   lipgloss.Color
-	Error     lipgloss.Color
-	Success   lipgloss.Color
-	StatusBG  lipgloss.Color
-	OverlayBG lipgloss.Color
+	Primary        lipgloss.Color
+	Muted          lipgloss.Color
+	Border         lipgloss.Color
+	Selected       lipgloss.Color
+	SelectedAuthor lipgloss.Color
+	Text           lipgloss.Color
+	Subtext        lipgloss.Color
+	Error          lipgloss.Color
+	Success        lipgloss.Color
+	StatusBG       lipgloss.Color
+	OverlayBG      lipgloss.Color
 }
 
 var themes = map[string]themeColors{
 	"tokyonight": {
-		Primary:   "#7aa2f7",
-		Muted:     "#565f89",
-		Border:    "#414868",
-		Selected:  "#7aa2f7",
-		Text:      "#c0caf5",
-		Subtext:   "#9aa5ce",
-		Error:     "#f7768e",
-		Success:   "#9ece6a",
-		StatusBG:  "#1a1b26",
-		OverlayBG: "#16161e",
+		Primary:        "#7aa2f7",
+		Muted:          "#565f89",
+		Border:         "#414868",
+		Selected:       "#7aa2f7",
+		SelectedAuthor: "#bb9af7",
+		Text:           "#c0caf5",
+		Subtext:        "#9aa5ce",
+		Error:          "#f7768e",
+		Success:        "#9ece6a",
+		StatusBG:       "#1a1b26",
+		OverlayBG:      "#16161e",
 	},
 	"kanagawa": {
-		Primary:   "#7e9cd8",
-		Muted:     "#727169",
-		Border:    "#54546d",
-		Selected:  "#7e9cd8",
-		Text:      "#dcd7ba",
-		Subtext:   "#938aa9",
-		Error:     "#e82424",
-		Success:   "#76946a",
-		StatusBG:  "#1f1f28",
-		OverlayBG: "#16161d",
+		Primary:        "#7e9cd8",
+		Muted:          "#727169",
+		Border:         "#54546d",
+		Selected:       "#7e9cd8",
+		SelectedAuthor: "#957fb8",
+		Text:           "#dcd7ba",
+		Subtext:        "#938aa9",
+		Error:          "#e82424",
+		Success:        "#76946a",
+		StatusBG:       "#1f1f28",
+		OverlayBG:      "#16161d",
 	},
 	"solarized": {
-		Primary:   "#268bd2",
-		Muted:     "#586e75",
-		Border:    "#073642",
-		Selected:  "#268bd2",
-		Text:      "#839496",
-		Subtext:   "#657b83",
-		Error:     "#dc322f",
-		Success:   "#859900",
-		StatusBG:  "#073642",
-		OverlayBG: "#002b36",
+		Primary:        "#268bd2",
+		Muted:          "#586e75",
+		Border:         "#073642",
+		Selected:       "#268bd2",
+		SelectedAuthor: "#2aa198",
+		Text:           "#839496",
+		Subtext:        "#657b83",
+		Error:          "#dc322f",
+		Success:        "#859900",
+		StatusBG:       "#073642",
+		OverlayBG:      "#002b36",
 	},
 	"catppuccin": {
-		Primary:   "#89b4fa",
-		Muted:     "#6c7086",
-		Border:    "#45475a",
-		Selected:  "#89b4fa",
-		Text:      "#cdd6f4",
-		Subtext:   "#a6adc8",
-		Error:     "#f38ba8",
-		Success:   "#a6e3a1",
-		StatusBG:  "#313244",
-		OverlayBG: "#1e1e2e",
+		Primary:        "#89b4fa",
+		Muted:          "#6c7086",
+		Border:         "#45475a",
+		Selected:       "#89b4fa",
+		SelectedAuthor: "#cba6f7",
+		Text:           "#cdd6f4",
+		Subtext:        "#a6adc8",
+		Error:          "#f38ba8",
+		Success:        "#a6e3a1",
+		StatusBG:       "#313244",
+		OverlayBG:      "#1e1e2e",
 	},
 }
 
 var (
-	colorPrimary  lipgloss.Color
-	colorMuted    lipgloss.Color
-	colorBorder   lipgloss.Color
-	colorSelected lipgloss.Color
-	colorText     lipgloss.Color
-	colorSubtext  lipgloss.Color
-	colorError    lipgloss.Color
-	colorSuccess  lipgloss.Color
+	colorPrimary        lipgloss.Color
+	colorMuted          lipgloss.Color
+	colorBorder         lipgloss.Color
+	colorSelected       lipgloss.Color
+	colorSelectedAuthor lipgloss.Color
+	colorText           lipgloss.Color
+	colorSubtext        lipgloss.Color
+	colorError          lipgloss.Color
+	colorSuccess        lipgloss.Color
 
 	tabStyle                lipgloss.Style
 	activeTabStyle          lipgloss.Style
 	postStyle               lipgloss.Style
 	selectedPostStyle       lipgloss.Style
 	authorStyle             lipgloss.Style
+	selectedAuthorStyle     lipgloss.Style
 	handleStyle             lipgloss.Style
 	selectedHandleStyle     lipgloss.Style
 	textStyle               lipgloss.Style
@@ -105,6 +112,7 @@ func applyTheme(name string) {
 	colorMuted = t.Muted
 	colorBorder = t.Border
 	colorSelected = t.Selected
+	colorSelectedAuthor = t.SelectedAuthor
 	colorText = t.Text
 	colorSubtext = t.Subtext
 	colorError = t.Error
@@ -135,6 +143,10 @@ func applyTheme(name string) {
 	authorStyle = lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorPrimary)
+
+	selectedAuthorStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorSelectedAuthor)
 
 	handleStyle = lipgloss.NewStyle().
 		Foreground(colorMuted)
