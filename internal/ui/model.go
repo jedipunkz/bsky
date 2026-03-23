@@ -769,7 +769,7 @@ func (m *Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "esc", "q":
+		case "esc", "q", "enter":
 			m.state = stateTimeline
 			m.statusMsg = ""
 			return m, tea.ClearScreen
@@ -1164,7 +1164,7 @@ func (m *Model) renderDetailFull() string {
 	}
 
 	divider := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", m.width))
-	help := handleStyle.Width(m.width).Render("l: like/unlike  r: repost/unrepost  b: bookmark/unbookmark  c: comment  u: profile  esc/q: back")
+	help := handleStyle.Width(m.width).Render("l: like/unlike  r: repost/unrepost  b: bookmark/unbookmark  c: comment  u: profile  enter/esc/q: back")
 	footer := statusBarStyle.Width(m.width).Render("")
 
 	// Build the top section (everything above the image).
