@@ -195,13 +195,14 @@ func New(client *api.Client, theme string) *Model {
 
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
-		fetchFeed(m.client, tabHome),
-		fetchFeed(m.client, tabDiscover),
-		loadBookmarks(m.client),
+		m.fetchFeed(tabHome),
+		m.fetchFeed(tabDiscover),
+		m.loadBookmarks(),
 	)
 }
 
-func fetchFeed(client *api.Client, t tab) tea.Cmd {
+func (m *Model) fetchFeed(t tab) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		var items []api.FeedItem
 		var cursor string
@@ -215,7 +216,8 @@ func fetchFeed(client *api.Client, t tab) tea.Cmd {
 	}
 }
 
-func loadMoreFeed(client *api.Client, t tab, cursor string) tea.Cmd {
+func (m *Model) loadMoreFeed(t tab, cursor string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		var items []api.FeedItem
 		var nextCursor string
@@ -229,7 +231,8 @@ func loadMoreFeed(client *api.Client, t tab, cursor string) tea.Cmd {
 	}
 }
 
-func sendPost(client *api.Client, text string, replyTo *api.Post) tea.Cmd {
+func (m *Model) sendPost(text string, replyTo *api.Post) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		var err error
 		if replyTo != nil {
@@ -241,77 +244,88 @@ func sendPost(client *api.Client, text string, replyTo *api.Post) tea.Cmd {
 	}
 }
 
-func likePost(client *api.Client, uri, cid string) tea.Cmd {
+func (m *Model) likePost(uri, cid string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		likeURI, err := client.Like(uri, cid)
 		return likeMsg{err: err, likeURI: likeURI, liked: true}
 	}
 }
 
-func unlikePost(client *api.Client, likeURI string) tea.Cmd {
+func (m *Model) unlikePost(likeURI string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		err := client.Unlike(likeURI)
 		return likeMsg{err: err, liked: false}
 	}
 }
 
-func repostPost(client *api.Client, uri, cid string) tea.Cmd {
+func (m *Model) repostPost(uri, cid string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		repostURI, err := client.Repost(uri, cid)
 		return repostMsg{err: err, repostURI: repostURI, reposted: true}
 	}
 }
 
-func unrepostPost(client *api.Client, repostURI string) tea.Cmd {
+func (m *Model) unrepostPost(repostURI string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		err := client.Unrepost(repostURI)
 		return repostMsg{err: err, reposted: false}
 	}
 }
 
-func bookmarkPost(client *api.Client, item api.FeedItem) tea.Cmd {
+func (m *Model) bookmarkPost(item api.FeedItem) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		err := client.CreateBookmark(item.Post.URI, item.Post.CID)
 		return bookmarkMsg{err: err, bookmarked: true}
 	}
 }
 
-func unbookmarkPost(client *api.Client, postURI string) tea.Cmd {
+func (m *Model) unbookmarkPost(postURI string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		err := client.DeleteBookmark(postURI)
 		return bookmarkMsg{err: err, bookmarked: false}
 	}
 }
 
-func searchPosts(client *api.Client, query string) tea.Cmd {
+func (m *Model) searchPosts(query string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		items, cursor, err := client.SearchPosts(query, 25, "")
 		return searchMsg{items: items, cursor: cursor, err: err}
 	}
 }
 
-func loadMoreSearch(client *api.Client, query, cursor string) tea.Cmd {
+func (m *Model) loadMoreSearch(query, cursor string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		items, nextCursor, err := client.SearchPosts(query, 25, cursor)
 		return appendSearchMsg{items: items, cursor: nextCursor, err: err}
 	}
 }
 
-func followUser(client *api.Client, did string) tea.Cmd {
+func (m *Model) followUser(did string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		followURI, err := client.Follow(did)
 		return followMsg{err: err, followURI: followURI, followed: true}
 	}
 }
 
-func unfollowUser(client *api.Client, followURI string) tea.Cmd {
+func (m *Model) unfollowUser(followURI string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		err := client.Unfollow(followURI)
 		return followMsg{err: err, followed: false}
 	}
 }
 
-func fetchProfile(client *api.Client, actor string) tea.Cmd {
+func (m *Model) fetchProfile(actor string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		profile, err := client.GetProfile(actor)
 		return fetchedProfileMsg{profile: profile, err: err}
@@ -338,7 +352,8 @@ func filterReplies(items []api.FeedItem, tabType profileTabType) []api.FeedItem 
 	return replies
 }
 
-func fetchAuthorFeed(client *api.Client, actor string, tabType profileTabType) tea.Cmd {
+func (m *Model) fetchAuthorFeed(actor string, tabType profileTabType) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		items, cursor, err := client.GetAuthorFeed(actor, authorFeedFilter(tabType), 50, "")
 		if err != nil {
@@ -348,7 +363,8 @@ func fetchAuthorFeed(client *api.Client, actor string, tabType profileTabType) t
 	}
 }
 
-func loadMoreAuthorFeed(client *api.Client, actor string, tabType profileTabType, cursor string) tea.Cmd {
+func (m *Model) loadMoreAuthorFeed(actor string, tabType profileTabType, cursor string) tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		items, nextCursor, err := client.GetAuthorFeed(actor, authorFeedFilter(tabType), 50, cursor)
 		if err != nil {
@@ -358,7 +374,8 @@ func loadMoreAuthorFeed(client *api.Client, actor string, tabType profileTabType
 	}
 }
 
-func loadBookmarks(client *api.Client) tea.Cmd {
+func (m *Model) loadBookmarks() tea.Cmd {
+	client := m.client
 	return func() tea.Msg {
 		items, cursor, err := client.GetBookmarks(50, "")
 		if err != nil {
@@ -429,8 +446,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.postSuccess = true
 		m.statusMsg = "Post sent!"
 		return m, tea.Batch(
-			fetchFeed(m.client, tabHome),
-			fetchFeed(m.client, tabDiscover),
+			m.fetchFeed(tabHome),
+			m.fetchFeed(tabDiscover),
 		)
 
 	case likeMsg:
@@ -474,10 +491,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "Bookmark failed: " + msg.err.Error()
 		} else if msg.bookmarked {
 			m.statusMsg = "Bookmarked!"
-			return m, loadBookmarks(m.client)
+			return m, m.loadBookmarks()
 		} else {
 			m.statusMsg = "Unbookmarked!"
-			return m, loadBookmarks(m.client)
+			return m, m.loadBookmarks()
 		}
 		return m, nil
 
@@ -603,7 +620,7 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.searchCursor++
 				} else if !m.searchLoadingMore && m.searchNextCursor != "" {
 					m.searchLoadingMore = true
-					return m, loadMoreSearch(m.client, m.searchQuery, m.searchNextCursor)
+					return m, m.loadMoreSearch(m.searchQuery, m.searchNextCursor)
 				}
 			} else {
 				feed := m.feeds[m.activeTab]
@@ -611,7 +628,7 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor[m.activeTab]++
 				} else if !m.loadingMore[m.activeTab] && m.nextCursor[m.activeTab] != "" && m.activeTab != tabSaved {
 					m.loadingMore[m.activeTab] = true
-					return m, loadMoreFeed(m.client, m.activeTab, m.nextCursor[m.activeTab])
+					return m, m.loadMoreFeed(m.activeTab, m.nextCursor[m.activeTab])
 				}
 			}
 
@@ -680,9 +697,9 @@ func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loading[m.activeTab] = true
 				m.cursor[m.activeTab] = 0
 				if m.activeTab == tabSaved {
-					return m, loadBookmarks(m.client)
+					return m, m.loadBookmarks()
 				}
-				return m, fetchFeed(m.client, m.activeTab)
+				return m, m.fetchFeed(m.activeTab)
 			}
 
 		case "g":
@@ -740,9 +757,9 @@ func (m *Model) openUserProfile(author api.Author, prevState state) (tea.Model, 
 	m.profilePrevState = prevState
 	m.state = stateUserProfile
 	return m, tea.Batch(
-		fetchProfile(m.client, author.Handle),
-		fetchAuthorFeed(m.client, author.Handle, profileTabPosts),
-		fetchAuthorFeed(m.client, author.Handle, profileTabReplies),
+		m.fetchProfile(author.Handle),
+		m.fetchAuthorFeed(author.Handle, profileTabPosts),
+		m.fetchAuthorFeed(author.Handle, profileTabReplies),
 	)
 }
 
@@ -777,23 +794,23 @@ func (m *Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "l":
 			post := m.detailItem.Post
 			if post.Viewer.Like != "" {
-				return m, unlikePost(m.client, post.Viewer.Like)
+				return m, m.unlikePost(post.Viewer.Like)
 			}
-			return m, likePost(m.client, post.URI, post.CID)
+			return m, m.likePost(post.URI, post.CID)
 
 		case "r":
 			post := m.detailItem.Post
 			if post.Viewer.Repost != "" {
-				return m, unrepostPost(m.client, post.Viewer.Repost)
+				return m, m.unrepostPost(post.Viewer.Repost)
 			}
-			return m, repostPost(m.client, post.URI, post.CID)
+			return m, m.repostPost(post.URI, post.CID)
 
 		case "b":
 			post := m.detailItem.Post
 			if m.isBookmarked(post.URI) {
-				return m, unbookmarkPost(m.client, post.URI)
+				return m, m.unbookmarkPost(post.URI)
 			}
-			return m, bookmarkPost(m.client, m.detailItem)
+			return m, m.bookmarkPost(m.detailItem)
 
 		case "c":
 			p := m.detailItem.Post
@@ -831,7 +848,7 @@ func (m *Model) updateCompose(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.composeErr = "Post exceeds 300 characters"
 				return m, nil
 			}
-			return m, sendPost(m.client, text, m.replyTo)
+			return m, m.sendPost(text, m.replyTo)
 		}
 	}
 	m.compose, cmd = m.compose.Update(msg)
@@ -850,9 +867,9 @@ func (m *Model) updateUserProfile(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.profileData.Viewer.Following != "" {
-				return m, unfollowUser(m.client, m.profileData.Viewer.Following)
+				return m, m.unfollowUser(m.profileData.Viewer.Following)
 			}
-			return m, followUser(m.client, m.profileData.DID)
+			return m, m.followUser(m.profileData.DID)
 		case "h":
 			if m.profileActiveTab > 0 {
 				m.profileActiveTab--
@@ -868,7 +885,7 @@ func (m *Model) updateUserProfile(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.profileCursors[t]++
 			} else if !m.profileFeedLoadingMore[t] && m.profileNextCursors[t] != "" {
 				m.profileFeedLoadingMore[t] = true
-				return m, loadMoreAuthorFeed(m.client, m.profileActor, t, m.profileNextCursors[t])
+				return m, m.loadMoreAuthorFeed(m.profileActor, t, m.profileNextCursors[t])
 			}
 		case "k":
 			if m.profileCursors[m.profileActiveTab] > 0 {
@@ -903,7 +920,7 @@ func (m *Model) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchLoading = true
 			m.inSearch = false
 			m.state = stateTimeline
-			return m, searchPosts(m.client, query)
+			return m, m.searchPosts(query)
 		}
 	}
 	m.searchInput, cmd = m.searchInput.Update(msg)
