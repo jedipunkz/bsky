@@ -113,9 +113,9 @@ func renderImageSixelView(src image.Image, maxCols, availableRows int) string {
 	if sixelRows < 1 {
 		return ""
 	}
-	cols, _ := imageDims(src, maxCols, sixelRows)
+	cols, rows := imageDims(src, maxCols, sixelRows)
 	pixW := cols * 8
-	pixH := sixelRows * 16
+	pixH := rows * 16
 	dst := image.NewRGBA(image.Rect(0, 0, pixW, pixH))
 	draw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
 
@@ -125,11 +125,11 @@ func renderImageSixelView(src image.Image, maxCols, availableRows int) string {
 		return ""
 	}
 
-	// "\n" × sixelRows  → placeholder lines (BubbleTea counts them)
-	// cursor-up sixelRows → back to image area start
-	// sixelData          → pixels drawn; cursor ends sixelRows below start ✓
+	// "\n" × sixelRows → placeholder lines (BubbleTea counts them)
+	// cursor-up rows     → back to image area start
+	// sixelData          → pixels drawn; cursor ends rows below start ✓
 	placeholder := strings.Repeat("\n", sixelRows)
-	cursorUp := fmt.Sprintf("\033[%dA", sixelRows)
+	cursorUp := fmt.Sprintf("\033[%dA", rows)
 	return placeholder + cursorUp + buf.String()
 }
 
@@ -137,9 +137,11 @@ func renderImageSixelView(src image.Image, maxCols, availableRows int) string {
 // padded/trimmed to exactly availableRows terminal rows ((availableRows-1) newlines).
 func renderImageBlockView(src image.Image, maxCols, availableRows int) string {
 	bg := color.RGBA{A: 255}
-	// NoDithering uses 2 pixel rows per terminal row (▀ half-block).
-	// Pass availableRows*2 as pixel height so output is exactly availableRows terminal rows.
-	pimg, err := ansimage.NewScaledFromImage(src, availableRows*2, maxCols, bg, ansimage.ScaleModeResize, ansimage.NoDithering)
+	// NoDithering uses 2 pixel rows per terminal row (▀ half-block), so the pixel
+	// height passed to pixterm is rows*2. imageDims keeps the aspect ratio: scaling
+	// straight to maxCols x availableRows would stretch the image over the pane.
+	cols, rows := imageDims(src, maxCols, availableRows)
+	pimg, err := ansimage.NewScaledFromImage(src, rows*2, cols, bg, ansimage.ScaleModeResize, ansimage.NoDithering)
 	if err != nil {
 		return renderImageBlocksFallback(src, maxCols, availableRows)
 	}
