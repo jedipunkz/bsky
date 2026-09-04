@@ -5,11 +5,13 @@ import (
 	"image"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/jedipunkz/bsky/internal/api"
 )
 
@@ -153,16 +155,16 @@ type Model struct {
 
 	statusMsg string
 
-	profileActor            string
-	profileData             *api.Profile
-	profileActiveTab        profileTabType
-	profileFeeds            [profileTabCount][]api.FeedItem
-	profileCursors          [profileTabCount]int
-	profileLoading          bool
-	profileFeedLoading      [profileTabCount]bool
-	profileFeedLoadingMore  [profileTabCount]bool
-	profileNextCursors      [profileTabCount]string
-	profilePrevState        state
+	profileActor           string
+	profileData            *api.Profile
+	profileActiveTab       profileTabType
+	profileFeeds           [profileTabCount][]api.FeedItem
+	profileCursors         [profileTabCount]int
+	profileLoading         bool
+	profileFeedLoading     [profileTabCount]bool
+	profileFeedLoadingMore [profileTabCount]bool
+	profileNextCursors     [profileTabCount]string
+	profilePrevState       state
 
 	imageCache   map[string]image.Image // URL -> decoded image (rendered at display time)
 	imageLoading map[string]bool        // URL -> loading in progress
@@ -969,7 +971,7 @@ func (m *Model) View() string {
 func (m *Model) renderTabs() string {
 	var line string
 	if m.searchLoading || m.inSearch {
-		line = activeTabStyle.UnsetUnderline().Render("Search Result")
+		line = activeTabStyle.Render("Search Result")
 	} else {
 		tabs := []string{"Home", "Discover", "Saved"}
 		var rendered []string
@@ -982,47 +984,122 @@ func (m *Model) renderTabs() string {
 		}
 		line = lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
 	}
-	divider := lipgloss.NewStyle().
-		Foreground(colorBorder).
-		Render(strings.Repeat("─", m.width))
+	if m.client != nil && m.client.Handle != "" {
+		account := handleStyle.Render("@" + m.client.Handle + " ")
+		if pad := m.width - lipgloss.Width(line) - lipgloss.Width(account); pad > 0 {
+			line += strings.Repeat(" ", pad) + account
+		}
+	}
+	divider := dividerStyle.Render(strings.Repeat("─", m.width))
 	return lipgloss.JoinVertical(lipgloss.Left, line, divider)
 }
 
-// renderFeedItem renders a single feed item as a styled post box.
-func (m *Model) renderFeedItem(item api.FeedItem, selected bool) string {
+// authorName returns the display name, falling back to the handle.
+func authorName(a api.Author) string {
+	if a.DisplayName != "" {
+		return a.DisplayName
+	}
+	return a.Handle
+}
+
+// relativeTime renders an RFC3339 timestamp as a compact age ("3m", "2h", "5d").
+// Returns "" when the timestamp is missing or unparsable.
+func relativeTime(createdAt string) string {
+	t, err := time.Parse(time.RFC3339, createdAt)
+	if err != nil {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+	return t.Format("Jan 2")
+}
+
+// renderPostHeader renders "name @handle" on the left and the post age on the right.
+func renderPostHeader(post api.Post, width int, nameSt, handleSt lipgloss.Style) string {
+	left := nameSt.Render(ansi.Truncate(authorName(post.Author), 24, "…")) +
+		" " + handleSt.Render("@"+ansi.Truncate(post.Author.Handle, 30, "…"))
+	age := relativeTime(post.Record.CreatedAt)
+	if age == "" {
+		return left
+	}
+	right := timeStyle.Render(age)
+	pad := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if pad < 1 {
+		return left
+	}
+	return left + strings.Repeat(" ", pad) + right
+}
+
+// renderPostMeta renders the counters line, omitting anything that is zero so
+// that quiet posts stay visually quiet. Returns "" when there is nothing to show.
+func (m *Model) renderPostMeta(post api.Post) string {
+	var parts []string
+	if post.Record.Reply != nil {
+		parts = append(parts, metaStyle.Render("↩ reply"))
+	}
+	if post.LikeCount > 0 || post.Viewer.Like != "" {
+		st := metaStyle
+		if post.Viewer.Like != "" {
+			st = likedStyle
+		}
+		parts = append(parts, st.Render(fmt.Sprintf("♥ %d", post.LikeCount)))
+	}
+	if post.RepostCount > 0 || post.Viewer.Repost != "" {
+		st := metaStyle
+		if post.Viewer.Repost != "" {
+			st = repostedStyle
+		}
+		parts = append(parts, st.Render(fmt.Sprintf("↺ %d", post.RepostCount)))
+	}
+	if post.ReplyCount > 0 {
+		parts = append(parts, metaStyle.Render(fmt.Sprintf("✦ %d", post.ReplyCount)))
+	}
+	if n := len(post.Embed.EmbedImages()); n > 0 {
+		parts = append(parts, metaStyle.Render(fmt.Sprintf("🖼 %d", n)))
+	}
+	if m.isBookmarked(post.URI) {
+		parts = append(parts, bookmarkedStyle.Render("★"))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, metaStyle.Render("  "))
+}
+
+// renderFeedItem renders a single feed item as a styled post box of the given
+// outer width (border and padding included).
+func (m *Model) renderFeedItem(item api.FeedItem, selected bool, width int) string {
+	nameSt, handleSt, textSt := authorStyle, handleStyle, textStyle
+	boxSt := postStyle
+	if selected {
+		nameSt, handleSt, textSt = selectedAuthorStyle, selectedHandleStyle, selectedTextStyle
+		boxSt = selectedPostStyle
+	}
+
+	inner := width - 2 // horizontal padding (2); the left border sits outside Width
+	if inner < 20 {
+		inner = 20
+	}
+
 	post := item.Post
-	name := post.Author.DisplayName
-	if name == "" {
-		name = post.Author.Handle
+	parts := []string{
+		renderPostHeader(post, inner, nameSt, handleSt),
+		renderTextWithURLsStyled(post.Record.Text, inner, textSt),
+	}
+	if meta := m.renderPostMeta(post); meta != "" {
+		parts = append(parts, meta)
 	}
 
-	var header, body, stats string
-	if selected {
-		header = selectedAuthorStyle.Render(name) + " " + selectedHandleStyle.Render("@"+post.Author.Handle)
-		body = renderTextWithURLsStyled(post.Record.Text, m.width-8, selectedTextStyle)
-		imgIcon := ""
-		if embedImgs := post.Embed.EmbedImages(); len(embedImgs) > 0 {
-			imgIcon = "  " + lipgloss.NewStyle().Foreground(colorSubtext).Render(fmt.Sprintf("[🖼 %d]", len(embedImgs)))
-		}
-		stats = selectedStatsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
-			post.LikeCount, post.RepostCount, post.ReplyCount)) + imgIcon
-	} else {
-		header = authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
-		body = renderTextWithURLs(post.Record.Text, m.width-8)
-		imgIcon := ""
-		if embedImgs := post.Embed.EmbedImages(); len(embedImgs) > 0 {
-			imgIcon = "  " + lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("[🖼 %d]", len(embedImgs)))
-		}
-		stats = statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
-			post.LikeCount, post.RepostCount, post.ReplyCount)) + imgIcon
-	}
-
-	content := lipgloss.JoinVertical(lipgloss.Left, header, body, stats)
-
-	if selected {
-		return selectedPostStyle.Width(m.width - 4).Render(content)
-	}
-	return postStyle.Width(m.width - 4).Render(content)
+	return boxSt.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
 }
 
 // fillFeedToHeight renders feed items around cur, expanding to fill height lines.
@@ -1050,7 +1127,7 @@ func (m *Model) fillFeedToHeight(feed []api.FeedItem, cur, height int) []string 
 	var forward []string
 	usedHeight := 0
 	for i := cur; i < len(feed); i++ {
-		r := m.renderFeedItem(feed[i], i == cur)
+		r := m.renderFeedItem(feed[i], i == cur, m.width-4)
 		h := lipgloss.Height(r)
 		remaining := height - usedHeight
 		if remaining <= 0 {
@@ -1069,7 +1146,7 @@ func (m *Model) fillFeedToHeight(feed []api.FeedItem, cur, height int) []string 
 	// Fill remaining space by expanding backward from cursor-1
 	var backward []string
 	for i := cur - 1; i >= 0; i-- {
-		r := m.renderFeedItem(feed[i], false)
+		r := m.renderFeedItem(feed[i], false, m.width-4)
 		h := lipgloss.Height(r)
 		if usedHeight+h > height {
 			break
@@ -1151,21 +1228,11 @@ func (m *Model) renderTimeline(height int) string {
 func (m *Model) renderDetailFull() string {
 	post := m.detailItem.Post
 
-	name := post.Author.DisplayName
-	if name == "" {
-		name = post.Author.Handle
-	}
-
-	header := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
-	body := renderTextWithURLs(post.Record.Text, m.width-8)
+	header := renderPostHeader(post, m.width-6, selectedAuthorStyle, selectedHandleStyle)
+	body := renderTextWithURLsStyled(post.Record.Text, m.width-6, selectedTextStyle)
 
 	// Stats and help are rendered outside the postBox so the image can sit between them.
-	bookmarkMark := ""
-	if m.isBookmarked(post.URI) {
-		bookmarkMark = "  ★"
-	}
-	stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d%s",
-		post.LikeCount, post.RepostCount, post.ReplyCount, bookmarkMark))
+	stats := lipgloss.NewStyle().Padding(0, 1).Render(m.renderPostMeta(post))
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		header,
@@ -1180,8 +1247,9 @@ func (m *Model) renderDetailFull() string {
 		statusLine = successStyle.Render("  " + m.statusMsg)
 	}
 
-	divider := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", m.width))
-	help := handleStyle.Width(m.width).Render("l: like/unlike  r: repost/unrepost  b: bookmark/unbookmark  c: comment  u: profile  enter/esc/q: back")
+	divider := dividerStyle.Render(strings.Repeat("─", m.width))
+	help := lipgloss.NewStyle().Width(m.width).Padding(0, 1).Render(
+		keyHints("l", "like", "r", "repost", "b", "bookmark", "c", "comment", "u", "profile", "⏎/esc", "back"))
 	footer := statusBarStyle.Width(m.width).Render("")
 
 	// Build the top section (everything above the image).
@@ -1260,14 +1328,24 @@ func (m *Model) fetchDetailImageCmd() tea.Cmd {
 	return fetchDetailImage(imgURL)
 }
 
+// keyHints renders alternating key/description pairs as a dimmed hint line
+// with the keys highlighted.
+func keyHints(pairs ...string) string {
+	var parts []string
+	for i := 0; i+1 < len(pairs); i += 2 {
+		parts = append(parts, keyStyle.Render(pairs[i])+" "+keyDescStyle.Render(pairs[i+1]))
+	}
+	return strings.Join(parts, keyDescStyle.Render(" · "))
+}
+
 func (m *Model) renderHelpBar() string {
 	var keys string
 	if m.inSearch {
-		keys = "j/k: scroll  enter: detail  u: profile  s: new search  esc: clear search  q: quit"
+		keys = keyHints("j/k", "scroll", "⏎", "detail", "u", "profile", "s", "new search", "esc", "clear", "q", "quit")
 	} else {
-		keys = "j/k: scroll  h/l: tab  enter: detail  u: profile  c: post  s: search  r: refresh  q: quit"
+		keys = keyHints("j/k", "scroll", "h/l", "tab", "⏎", "detail", "u", "profile", "c", "post", "s", "search", "r", "refresh", "q", "quit")
 	}
-	return handleStyle.Width(m.width).Render(keys)
+	return lipgloss.NewStyle().Width(m.width).Padding(0, 1).Render(keys)
 }
 
 func (m *Model) renderSearchOverlay(base string) string {
@@ -1276,7 +1354,7 @@ func (m *Model) renderSearchOverlay(base string) string {
 		overlayW = 50
 	}
 
-	help := handleStyle.Render("Enter: search  Esc: cancel")
+	help := keyHints("⏎", "search", "esc", "cancel")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		composeTitleStyle.Render("Search Posts"),
@@ -1327,7 +1405,7 @@ func (m *Model) renderOverlay(base string) string {
 		errLine = "\n" + errorStyle.Render(m.composeErr)
 	}
 
-	help := handleStyle.Render("Ctrl+S: post  Esc: cancel")
+	help := keyHints("ctrl+s", "post", "esc", "cancel")
 
 	title := "New Post"
 	if m.replyTo != nil {
@@ -1380,31 +1458,31 @@ func (m *Model) renderUserProfile(base string) string {
 		if name == "" {
 			name = p.Handle
 		}
-		headerParts = append(headerParts, authorStyle.Render(name))
-		headerParts = append(headerParts, handleStyle.Render("@"+p.Handle))
-		headerParts = append(headerParts, statsStyle.Render(fmt.Sprintf(
-			"フォロワー: %d  フォロー: %d  投稿: %d",
+		title := selectedAuthorStyle.Render(name) + " " + handleStyle.Render("@"+p.Handle)
+		if p.Viewer.Following != "" {
+			title += "  " + successStyle.Render("✓ following")
+		}
+		headerParts = append(headerParts, title)
+		headerParts = append(headerParts, metaStyle.Render(fmt.Sprintf(
+			"%d followers  ·  %d following  ·  %d posts",
 			p.FollowersCount, p.FollowsCount, p.PostsCount,
 		)))
-		if p.Viewer.Following != "" {
-			headerParts = append(headerParts, lipgloss.NewStyle().Foreground(colorSuccess).Render("フォロー中"))
-		}
 	}
 	header := strings.Join(headerParts, "\n")
 
 	// Tab bar
 	var tabPosts, tabReplies string
 	if m.profileActiveTab == profileTabPosts {
-		tabPosts = activeTabStyle.UnsetUnderline().Render("投稿")
-		tabReplies = tabStyle.Render("返信")
+		tabPosts = activeTabStyle.Render("Posts")
+		tabReplies = tabStyle.Render("Replies")
 	} else {
-		tabPosts = tabStyle.Render("投稿")
-		tabReplies = activeTabStyle.UnsetUnderline().Render("返信")
+		tabPosts = tabStyle.Render("Posts")
+		tabReplies = activeTabStyle.Render("Replies")
 	}
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabPosts, tabReplies)
 
-	divider := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerW))
-	help := handleStyle.Render("h/l: tab  j/k: scroll  f: follow/unfollow  q: back")
+	divider := dividerStyle.Render(strings.Repeat("─", innerW))
+	help := keyHints("h/l", "tab", "j/k", "scroll", "f", "follow", "q", "back")
 
 	// Measure non-posts content height accurately
 	frameContent := lipgloss.JoinVertical(lipgloss.Left, header, "", tabBar, divider, help)
@@ -1473,31 +1551,7 @@ func (m *Model) renderProfilePosts(width, height int) string {
 
 	var lines []string
 	for i := start; i < end; i++ {
-		post := feed[i].Post
-		selected := i == cur
-
-		name := post.Author.DisplayName
-		if name == "" {
-			name = post.Author.Handle
-		}
-		postHeader := authorStyle.Render(name) + " " + handleStyle.Render("@"+post.Author.Handle)
-		body := renderTextWithURLs(post.Record.Text, width-8)
-		stats := statsStyle.Render(fmt.Sprintf("♥ %d  ↺ %d  ✦ %d",
-			post.LikeCount, post.RepostCount, post.ReplyCount))
-
-		postContent := lipgloss.JoinVertical(lipgloss.Left,
-			postHeader,
-			body,
-			stats,
-		)
-
-		var rendered string
-		if selected {
-			rendered = selectedPostStyle.Width(width - 4).Render(postContent)
-		} else {
-			rendered = postStyle.Width(width - 4).Render(postContent)
-		}
-		lines = append(lines, rendered)
+		lines = append(lines, m.renderFeedItem(feed[i], i == cur, width-4))
 	}
 	result := strings.Join(lines, "\n")
 	if m.profileFeedLoadingMore[m.profileActiveTab] {
@@ -1517,18 +1571,13 @@ func filterSearchResults(items []api.FeedItem, query string) []api.FeedItem {
 	return filtered
 }
 
-// renderTextWithURLs wraps text and renders URLs as OSC 8 terminal hyperlinks
-// (underlined, primary color). Shift+click opens the URL in the browser.
-func renderTextWithURLs(text string, width int) string {
-	return renderTextWithURLsStyled(text, width, textStyle)
-}
-
-// renderTextWithURLsStyled is like renderTextWithURLs but uses a custom text style.
+// renderTextWithURLsStyled wraps text and renders URLs as OSC 8 terminal
+// hyperlinks (underlined, primary color). Shift+click opens the URL in the browser.
 func renderTextWithURLsStyled(text string, width int, ts lipgloss.Style) string {
 	wrapped := wrapText(text, width)
 	matches := urlRegex.FindAllStringIndex(wrapped, -1)
 	if len(matches) == 0 {
-		return ts.Render(wrapped)
+		return renderLines(ts, wrapped)
 	}
 
 	var b strings.Builder
@@ -1536,7 +1585,7 @@ func renderTextWithURLsStyled(text string, width int, ts lipgloss.Style) string 
 	for _, m := range matches {
 		start, end := m[0], m[1]
 		if start > last {
-			b.WriteString(ts.Render(wrapped[last:start]))
+			b.WriteString(renderLines(ts, wrapped[last:start]))
 		}
 		rawURL := wrapped[start:end]
 		styled := linkStyle.Render(rawURL)
@@ -1545,35 +1594,27 @@ func renderTextWithURLsStyled(text string, width int, ts lipgloss.Style) string 
 		last = end
 	}
 	if last < len(wrapped) {
-		b.WriteString(ts.Render(wrapped[last:]))
+		b.WriteString(renderLines(ts, wrapped[last:]))
 	}
 	return b.String()
+}
+
+// renderLines styles each line individually. Rendering a multi-line string in
+// one call would make lipgloss pad every line to the block width, which
+// misplaces text that follows on the same line (e.g. a URL after a wrap).
+func renderLines(st lipgloss.Style, s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = st.Render(l)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func wrapText(text string, width int) string {
 	if width <= 0 {
 		return text
 	}
-	words := strings.Fields(text)
-	var lines []string
-	var line strings.Builder
-	lineLen := 0
-	for _, w := range words {
-		wl := len([]rune(w))
-		if lineLen+wl+1 > width && lineLen > 0 {
-			lines = append(lines, line.String())
-			line.Reset()
-			lineLen = 0
-		}
-		if lineLen > 0 {
-			line.WriteString(" ")
-			lineLen++
-		}
-		line.WriteString(w)
-		lineLen += wl
-	}
-	if line.Len() > 0 {
-		lines = append(lines, line.String())
-	}
-	return strings.Join(lines, "\n")
+	// ansi.Wrap is display-width aware, so CJK (2-cell) runes and words without
+	// spaces wrap correctly instead of overflowing the post box.
+	return ansi.Wrap(text, width, "")
 }

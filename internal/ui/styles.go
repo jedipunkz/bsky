@@ -82,24 +82,30 @@ var (
 	colorError          lipgloss.Color
 	colorSuccess        lipgloss.Color
 
-	tabStyle                lipgloss.Style
-	activeTabStyle          lipgloss.Style
-	postStyle               lipgloss.Style
-	selectedPostStyle       lipgloss.Style
-	authorStyle             lipgloss.Style
-	selectedAuthorStyle     lipgloss.Style
-	handleStyle             lipgloss.Style
-	selectedHandleStyle     lipgloss.Style
-	textStyle               lipgloss.Style
-	selectedTextStyle       lipgloss.Style
-	linkStyle               lipgloss.Style
-	statsStyle              lipgloss.Style
-	selectedStatsStyle      lipgloss.Style
-	statusBarStyle          lipgloss.Style
-	overlayStyle            lipgloss.Style
-	composeTitleStyle       lipgloss.Style
-	errorStyle              lipgloss.Style
-	successStyle            lipgloss.Style
+	tabStyle            lipgloss.Style
+	activeTabStyle      lipgloss.Style
+	postStyle           lipgloss.Style
+	selectedPostStyle   lipgloss.Style
+	authorStyle         lipgloss.Style
+	selectedAuthorStyle lipgloss.Style
+	handleStyle         lipgloss.Style
+	selectedHandleStyle lipgloss.Style
+	textStyle           lipgloss.Style
+	selectedTextStyle   lipgloss.Style
+	linkStyle           lipgloss.Style
+	statusBarStyle      lipgloss.Style
+	overlayStyle        lipgloss.Style
+	composeTitleStyle   lipgloss.Style
+	errorStyle          lipgloss.Style
+	successStyle        lipgloss.Style
+	timeStyle           lipgloss.Style
+	metaStyle           lipgloss.Style
+	likedStyle          lipgloss.Style
+	repostedStyle       lipgloss.Style
+	bookmarkedStyle     lipgloss.Style
+	keyStyle            lipgloss.Style
+	keyDescStyle        lipgloss.Style
+	dividerStyle        lipgloss.Style
 )
 
 func applyTheme(name string) {
@@ -124,27 +130,31 @@ func applyTheme(name string) {
 
 	activeTabStyle = lipgloss.NewStyle().
 		Padding(0, 2).
-		Foreground(colorPrimary).
-		Bold(true).
-		Underline(true)
+		Foreground(t.OverlayBG).
+		Background(colorPrimary).
+		Bold(true)
 
 	postStyle = lipgloss.NewStyle().
 		Padding(0, 1).
+		MarginBottom(1).
 		BorderLeft(true).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(colorBorder)
 
 	selectedPostStyle = lipgloss.NewStyle().
 		Padding(0, 1).
+		MarginBottom(1).
 		BorderLeft(true).
 		BorderStyle(lipgloss.ThickBorder()).
 		BorderForeground(colorSelected)
 
 	authorStyle = lipgloss.NewStyle().
 		Bold(true).
-		Foreground(colorSelectedAuthor)
+		Foreground(colorText)
 
-	selectedAuthorStyle = authorStyle
+	selectedAuthorStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorSelectedAuthor)
 
 	handleStyle = lipgloss.NewStyle().
 		Foreground(colorMuted)
@@ -153,20 +163,14 @@ func applyTheme(name string) {
 		Foreground(colorSubtext)
 
 	textStyle = lipgloss.NewStyle().
-		Foreground(colorText)
+		Foreground(colorSubtext)
 
 	selectedTextStyle = lipgloss.NewStyle().
-		Foreground(colorSelected)
+		Foreground(colorText)
 
 	linkStyle = lipgloss.NewStyle().
 		Foreground(colorPrimary).
 		Underline(true)
-
-	statsStyle = lipgloss.NewStyle().
-		Foreground(colorMuted)
-
-	selectedStatsStyle = lipgloss.NewStyle().
-		Foreground(colorSubtext)
 
 	statusBarStyle = lipgloss.NewStyle().
 		Background(t.StatusBG).
@@ -189,4 +193,29 @@ func applyTheme(name string) {
 
 	successStyle = lipgloss.NewStyle().
 		Foreground(colorSuccess)
+
+	timeStyle = lipgloss.NewStyle().
+		Foreground(colorMuted)
+
+	metaStyle = lipgloss.NewStyle().
+		Foreground(colorMuted)
+
+	likedStyle = lipgloss.NewStyle().
+		Foreground(colorError)
+
+	repostedStyle = lipgloss.NewStyle().
+		Foreground(colorSuccess)
+
+	bookmarkedStyle = lipgloss.NewStyle().
+		Foreground(colorSelectedAuthor)
+
+	keyStyle = lipgloss.NewStyle().
+		Foreground(colorPrimary).
+		Bold(true)
+
+	keyDescStyle = lipgloss.NewStyle().
+		Foreground(colorMuted)
+
+	dividerStyle = lipgloss.NewStyle().
+		Foreground(colorBorder)
 }
