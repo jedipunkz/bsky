@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"image"
 	"strings"
 	"testing"
 	"time"
@@ -16,10 +17,13 @@ func newTestModel() *Model {
 	applyTheme("tokyonight")
 	ta := textarea.New()
 	return &Model{
-		client:  nil,
-		compose: ta,
-		width:   80,
-		height:  24,
+		client:       nil,
+		compose:      ta,
+		width:        80,
+		height:       24,
+		imageCache:   make(map[string]image.Image),
+		imageLoading: make(map[string]bool),
+		imageError:   make(map[string]string),
 	}
 }
 
@@ -119,5 +123,84 @@ func TestWrapText_WrapsCJKByDisplayWidth(t *testing.T) {
 		if w := ansi.StringWidth(l); w > 10 {
 			t.Errorf("line width %d exceeds limit 10: %q", w, l)
 		}
+	}
+}
+
+func feed(uris ...string) []api.FeedItem { return items(uris...) }
+
+func TestUpdateTimeline_ScrollsTheActiveListOnly(t *testing.T) {
+	m := newTestModel()
+	m.feeds[tabHome].set(feed("a", "b"), "", nil)
+	m.search.set(feed("s1", "s2", "s3"), "", nil)
+	m.inSearch = true
+
+	press := func(r rune) tea.Cmd {
+		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		return cmd
+	}
+	press('j')
+	press('j')
+
+	if m.search.cursor != 2 {
+		t.Errorf("search cursor = %d, want 2", m.search.cursor)
+	}
+	if m.feeds[tabHome].cursor != 0 {
+		t.Errorf("timeline cursor = %d, want it untouched while searching", m.feeds[tabHome].cursor)
+	}
+
+	press('q') // leaves the search
+	if m.inSearch || len(m.search.items) != 0 {
+		t.Errorf("q must clear the search, got inSearch=%v items=%d", m.inSearch, len(m.search.items))
+	}
+}
+
+func TestUpdateTimeline_LoadsNextPageAtTheEnd(t *testing.T) {
+	m := newTestModel()
+	m.feeds[tabHome].set(feed("a"), "next", nil)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if cmd == nil {
+		t.Fatal("expected a load-more command at the end of the list")
+	}
+	if !m.feeds[tabHome].loadingMore {
+		t.Error("expected the list to be marked as loading more")
+	}
+}
+
+func TestUpdate_ListMsgRoutesToItsList(t *testing.T) {
+	m := newTestModel()
+
+	m.Update(listMsg{id: profileList(profileTabReplies), items: feed("r1"), cursor: "c"})
+	if got := len(m.profileFeeds[profileTabReplies].items); got != 1 {
+		t.Errorf("profile replies got %d items, want 1", got)
+	}
+	if got := len(m.profileFeeds[profileTabPosts].items); got != 0 {
+		t.Errorf("profile posts got %d items, want 0", got)
+	}
+
+	m.searchQuery = "go"
+	m.Update(listMsg{id: searchList, items: feed("s1")})
+	m.Update(listMsg{id: searchList, more: true, items: feed("s2")})
+	if got := len(m.search.items); got != 2 {
+		t.Errorf("search got %d items, want 2 after the appended page", got)
+	}
+	if !m.inSearch {
+		t.Error("a successful search must switch the timeline to the results")
+	}
+	if !strings.Contains(m.statusMsg, "2 results") {
+		t.Errorf("statusMsg = %q, want the result count", m.statusMsg)
+	}
+}
+
+func TestUpdate_ListMsgErrorKeepsItems(t *testing.T) {
+	m := newTestModel()
+	m.feeds[tabHome].set(feed("a"), "", nil)
+
+	m.Update(listMsg{id: timelineList(tabHome), err: errors.New("network down")})
+	if len(m.feeds[tabHome].items) != 1 {
+		t.Error("a failed refresh must keep the posts already on screen")
+	}
+	if m.feeds[tabHome].err != "network down" {
+		t.Errorf("err = %q", m.feeds[tabHome].err)
 	}
 }

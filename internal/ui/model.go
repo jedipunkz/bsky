@@ -3,19 +3,13 @@ package ui
 import (
 	"fmt"
 	"image"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/jedipunkz/bsky/internal/api"
 )
-
-var urlRegex = regexp.MustCompile(`https?://[^\s]+`)
 
 type tab int
 
@@ -44,8 +38,31 @@ const (
 	profileTabCount
 )
 
-type fetchedMsg struct {
-	tab    tab
+// listID addresses one of the model's feed lists, so a command started now can
+// deliver its page to the right list later.
+type listID struct {
+	kind listKind
+	idx  int
+}
+
+type listKind int
+
+const (
+	listTimeline listKind = iota
+	listProfile
+	listSearch
+)
+
+func timelineList(t tab) listID            { return listID{kind: listTimeline, idx: int(t)} }
+func profileList(pt profileTabType) listID { return listID{kind: listProfile, idx: int(pt)} }
+
+var searchList = listID{kind: listSearch}
+
+// listMsg carries a fetched page back to the list it was requested for. more
+// marks a next-page fetch, which appends instead of replacing.
+type listMsg struct {
+	id     listID
+	more   bool
 	items  []api.FeedItem
 	cursor string
 	err    error
@@ -78,47 +95,14 @@ type bookmarkMsg struct {
 	bookmarked bool
 }
 
-type appendedMsg struct {
-	tab    tab
-	items  []api.FeedItem
-	cursor string
-	err    error
-}
-
-type searchMsg struct {
-	items  []api.FeedItem
-	cursor string
-	err    error
-}
-
-type appendSearchMsg struct {
-	items  []api.FeedItem
-	cursor string
-	err    error
-}
-
-type fetchedProfileMsg struct {
-	profile *api.Profile
-	err     error
-}
-
 type followMsg struct {
 	err       error
 	followURI string
 	followed  bool
 }
 
-type fetchedAuthorFeedMsg struct {
-	tabType profileTabType
-	items   []api.FeedItem
-	cursor  string
-	err     error
-}
-
-type appendedAuthorFeedMsg struct {
-	tabType profileTabType
-	items   []api.FeedItem
-	cursor  string
+type fetchedProfileMsg struct {
+	profile *api.Profile
 	err     error
 }
 
@@ -130,12 +114,12 @@ type Model struct {
 	state     state
 	prevState state
 
-	feeds       [tabCount][]api.FeedItem
-	cursor      [tabCount]int
-	loading     [tabCount]bool
-	loadingMore [tabCount]bool
-	nextCursor  [tabCount]string
-	fetchErr    [tabCount]string
+	feeds [tabCount]feedList
+
+	search      feedList
+	searchInput textinput.Model
+	searchQuery string
+	inSearch    bool
 
 	detailItem api.FeedItem
 	replyTo    *api.Post
@@ -144,27 +128,14 @@ type Model struct {
 	composeErr  string
 	postSuccess bool
 
-	searchInput       textinput.Model
-	searchResults     []api.FeedItem
-	searchCursor      int
-	searchLoading     bool
-	searchLoadingMore bool
-	searchNextCursor  string
-	inSearch          bool
-	searchQuery       string
-
 	statusMsg string
 
-	profileActor           string
-	profileData            *api.Profile
-	profileActiveTab       profileTabType
-	profileFeeds           [profileTabCount][]api.FeedItem
-	profileCursors         [profileTabCount]int
-	profileLoading         bool
-	profileFeedLoading     [profileTabCount]bool
-	profileFeedLoadingMore [profileTabCount]bool
-	profileNextCursors     [profileTabCount]string
-	profilePrevState       state
+	profileActor     string
+	profileData      *api.Profile
+	profileLoading   bool
+	profileActiveTab profileTabType
+	profileFeeds     [profileTabCount]feedList
+	profilePrevState state
 
 	imageCache   map[string]image.Image // URL -> decoded image (rendered at display time)
 	imageLoading map[string]bool        // URL -> loading in progress
@@ -197,203 +168,42 @@ func New(client *api.Client, theme string) *Model {
 
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
-		m.fetchFeed(tabHome),
-		m.fetchFeed(tabDiscover),
-		m.loadBookmarks(),
+		m.loadFeed(tabHome, ""),
+		m.loadFeed(tabDiscover, ""),
+		m.loadFeed(tabSaved, ""),
 	)
 }
 
-func (m *Model) fetchFeed(t tab) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		var items []api.FeedItem
-		var cursor string
-		var err error
-		if t == tabHome {
-			items, cursor, err = client.GetTimeline(50, "")
-		} else {
-			items, cursor, err = client.GetDiscoverFeed(50, "")
-		}
-		return fetchedMsg{tab: t, items: items, cursor: cursor, err: err}
+// list resolves a listID to the list it addresses.
+func (m *Model) list(id listID) *feedList {
+	switch id.kind {
+	case listProfile:
+		return &m.profileFeeds[id.idx]
+	case listSearch:
+		return &m.search
+	default:
+		return &m.feeds[id.idx]
 	}
 }
 
-func (m *Model) loadMoreFeed(t tab, cursor string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		var items []api.FeedItem
-		var nextCursor string
-		var err error
-		if t == tabHome {
-			items, nextCursor, err = client.GetTimeline(50, cursor)
-		} else {
-			items, nextCursor, err = client.GetDiscoverFeed(50, cursor)
-		}
-		return appendedMsg{tab: t, items: items, cursor: nextCursor, err: err}
+// currentList returns the list the timeline view is scrolling: the search
+// results when a search is active, otherwise the active tab.
+func (m *Model) currentList() (*feedList, listID) {
+	if m.inSearch {
+		return &m.search, searchList
 	}
+	return &m.feeds[m.activeTab], timelineList(m.activeTab)
 }
 
-func (m *Model) sendPost(text string, replyTo *api.Post) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		var err error
-		if replyTo != nil {
-			err = client.CreateReply(text, replyTo.URI, replyTo.CID)
-		} else {
-			err = client.CreatePost(text)
-		}
-		return postSentMsg{err: err}
-	}
-}
-
-func (m *Model) likePost(uri, cid string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		likeURI, err := client.Like(uri, cid)
-		return likeMsg{err: err, likeURI: likeURI, liked: true}
-	}
-}
-
-func (m *Model) unlikePost(likeURI string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		err := client.Unlike(likeURI)
-		return likeMsg{err: err, liked: false}
-	}
-}
-
-func (m *Model) repostPost(uri, cid string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		repostURI, err := client.Repost(uri, cid)
-		return repostMsg{err: err, repostURI: repostURI, reposted: true}
-	}
-}
-
-func (m *Model) unrepostPost(repostURI string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		err := client.Unrepost(repostURI)
-		return repostMsg{err: err, reposted: false}
-	}
-}
-
-func (m *Model) bookmarkPost(item api.FeedItem) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		err := client.CreateBookmark(item.Post.URI, item.Post.CID)
-		return bookmarkMsg{err: err, bookmarked: true}
-	}
-}
-
-func (m *Model) unbookmarkPost(postURI string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		err := client.DeleteBookmark(postURI)
-		return bookmarkMsg{err: err, bookmarked: false}
-	}
-}
-
-func (m *Model) searchPosts(query string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		items, cursor, err := client.SearchPosts(query, 25, "")
-		return searchMsg{items: items, cursor: cursor, err: err}
-	}
-}
-
-func (m *Model) loadMoreSearch(query, cursor string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		items, nextCursor, err := client.SearchPosts(query, 25, cursor)
-		return appendSearchMsg{items: items, cursor: nextCursor, err: err}
-	}
-}
-
-func (m *Model) followUser(did string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		followURI, err := client.Follow(did)
-		return followMsg{err: err, followURI: followURI, followed: true}
-	}
-}
-
-func (m *Model) unfollowUser(followURI string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		err := client.Unfollow(followURI)
-		return followMsg{err: err, followed: false}
-	}
-}
-
-func (m *Model) fetchProfile(actor string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		profile, err := client.GetProfile(actor)
-		return fetchedProfileMsg{profile: profile, err: err}
-	}
-}
-
-func authorFeedFilter(tabType profileTabType) string {
-	if tabType == profileTabPosts {
-		return "posts_no_replies"
-	}
-	return "posts_with_replies"
-}
-
-func filterReplies(items []api.FeedItem, tabType profileTabType) []api.FeedItem {
-	if tabType != profileTabReplies {
-		return items
-	}
-	var replies []api.FeedItem
-	for _, item := range items {
-		if item.Post.Record.Reply != nil {
-			replies = append(replies, item)
-		}
-	}
-	return replies
-}
-
-func (m *Model) fetchAuthorFeed(actor string, tabType profileTabType) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		items, cursor, err := client.GetAuthorFeed(actor, authorFeedFilter(tabType), 50, "")
-		if err != nil {
-			return fetchedAuthorFeedMsg{tabType: tabType, err: err}
-		}
-		return fetchedAuthorFeedMsg{tabType: tabType, items: filterReplies(items, tabType), cursor: cursor}
-	}
-}
-
-func (m *Model) loadMoreAuthorFeed(actor string, tabType profileTabType, cursor string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		items, nextCursor, err := client.GetAuthorFeed(actor, authorFeedFilter(tabType), 50, cursor)
-		if err != nil {
-			return appendedAuthorFeedMsg{tabType: tabType, err: err}
-		}
-		return appendedAuthorFeedMsg{tabType: tabType, items: filterReplies(items, tabType), cursor: nextCursor}
-	}
-}
-
-func (m *Model) loadBookmarks() tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		items, cursor, err := client.GetBookmarks(50, "")
-		if err != nil {
-			return fetchedMsg{tab: tabSaved, err: err}
-		}
-		return fetchedMsg{tab: tabSaved, items: items, cursor: cursor}
-	}
-}
-
-func fetchDetailImage(url string) tea.Cmd {
-	return func() tea.Msg {
-		img, err := downloadImage(url)
-		if err != nil {
-			return imageFetchedMsg{url: url, err: err}
-		}
-		return imageFetchedMsg{url: url, img: img}
+// loadMore fetches the next page of the given list.
+func (m *Model) loadMore(id listID, cursor string) tea.Cmd {
+	switch id.kind {
+	case listProfile:
+		return m.loadAuthorFeed(m.profileActor, profileTabType(id.idx), cursor)
+	case listSearch:
+		return m.loadSearch(m.searchQuery, cursor)
+	default:
+		return m.loadFeed(tab(id.idx), cursor)
 	}
 }
 
@@ -405,34 +215,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.compose.SetWidth(m.width/2 - 8)
 		return m, nil
 
+	case listMsg:
+		l := m.list(msg.id)
+		if msg.more {
+			l.appendPage(msg.items, msg.cursor, msg.err)
+		} else {
+			l.set(msg.items, msg.cursor, msg.err)
+		}
+		if msg.id.kind == listSearch {
+			m.reportSearch(msg)
+		}
+		return m, nil
+
 	case imageFetchedMsg:
 		delete(m.imageLoading, msg.url)
 		if msg.err != nil {
 			m.imageError[msg.url] = msg.err.Error()
 		} else {
 			m.imageCache[msg.url] = msg.img
-		}
-		return m, nil
-
-	case fetchedMsg:
-		m.loading[msg.tab] = false
-		if msg.err != nil {
-			m.fetchErr[msg.tab] = msg.err.Error()
-		} else {
-			m.feeds[msg.tab] = msg.items
-			m.nextCursor[msg.tab] = msg.cursor
-			m.fetchErr[msg.tab] = ""
-		}
-		return m, nil
-
-	case appendedMsg:
-		m.loadingMore[msg.tab] = false
-		if msg.err != nil {
-			m.fetchErr[msg.tab] = msg.err.Error()
-		} else {
-			m.feeds[msg.tab] = append(m.feeds[msg.tab], msg.items...)
-			m.nextCursor[msg.tab] = msg.cursor
-			m.fetchErr[msg.tab] = ""
 		}
 		return m, nil
 
@@ -448,99 +248,74 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.postSuccess = true
 		m.statusMsg = "Post sent!"
 		return m, tea.Batch(
-			m.fetchFeed(tabHome),
-			m.fetchFeed(tabDiscover),
+			m.loadFeed(tabHome, ""),
+			m.loadFeed(tabDiscover, ""),
 		)
 
 	case likeMsg:
 		if msg.err != nil {
 			m.statusMsg = "Like failed: " + msg.err.Error()
-		} else if msg.liked {
+			return m, nil
+		}
+		post := &m.detailItem.Post
+		if msg.liked {
 			m.statusMsg = "Liked!"
-			m.detailItem.Post.LikeCount++
-			m.detailItem.Post.Viewer.Like = msg.likeURI
-			m.syncDetailItemToFeed()
+			post.LikeCount++
+			post.Viewer.Like = msg.likeURI
 		} else {
 			m.statusMsg = "Unliked!"
-			if m.detailItem.Post.LikeCount > 0 {
-				m.detailItem.Post.LikeCount--
-			}
-			m.detailItem.Post.Viewer.Like = ""
-			m.syncDetailItemToFeed()
+			post.LikeCount = decrement(post.LikeCount)
+			post.Viewer.Like = ""
 		}
+		m.syncDetailItemToFeed()
 		return m, nil
 
 	case repostMsg:
 		if msg.err != nil {
 			m.statusMsg = "Repost failed: " + msg.err.Error()
-		} else if msg.reposted {
+			return m, nil
+		}
+		post := &m.detailItem.Post
+		if msg.reposted {
 			m.statusMsg = "Reposted!"
-			m.detailItem.Post.RepostCount++
-			m.detailItem.Post.Viewer.Repost = msg.repostURI
-			m.syncDetailItemToFeed()
+			post.RepostCount++
+			post.Viewer.Repost = msg.repostURI
 		} else {
 			m.statusMsg = "Unreposted!"
-			if m.detailItem.Post.RepostCount > 0 {
-				m.detailItem.Post.RepostCount--
-			}
-			m.detailItem.Post.Viewer.Repost = ""
-			m.syncDetailItemToFeed()
+			post.RepostCount = decrement(post.RepostCount)
+			post.Viewer.Repost = ""
 		}
+		m.syncDetailItemToFeed()
 		return m, nil
 
 	case bookmarkMsg:
 		if msg.err != nil {
 			m.statusMsg = "Bookmark failed: " + msg.err.Error()
-		} else if msg.bookmarked {
+			return m, nil
+		}
+		if msg.bookmarked {
 			m.statusMsg = "Bookmarked!"
-			return m, m.loadBookmarks()
 		} else {
 			m.statusMsg = "Unbookmarked!"
-			return m, m.loadBookmarks()
 		}
-		return m, nil
-
-	case searchMsg:
-		m.searchLoading = false
-		if msg.err != nil {
-			m.statusMsg = "Search failed: " + msg.err.Error()
-			m.inSearch = false
-		} else {
-			filtered := filterSearchResults(msg.items, m.searchQuery)
-			m.searchResults = filtered
-			m.searchNextCursor = msg.cursor
-			m.searchCursor = 0
-			m.inSearch = true
-			m.statusMsg = fmt.Sprintf("Search: %q (%d results)", m.searchQuery, len(filtered))
-		}
-		return m, nil
-
-	case appendSearchMsg:
-		m.searchLoadingMore = false
-		if msg.err == nil {
-			filtered := filterSearchResults(msg.items, m.searchQuery)
-			m.searchResults = append(m.searchResults, filtered...)
-			m.searchNextCursor = msg.cursor
-			m.statusMsg = fmt.Sprintf("Search: %q (%d results)", m.searchQuery, len(m.searchResults))
-		}
-		return m, nil
+		return m, m.loadFeed(tabSaved, "")
 
 	case followMsg:
 		if msg.err != nil {
 			m.statusMsg = "Follow failed: " + msg.err.Error()
-		} else if msg.followed {
+			return m, nil
+		}
+		if msg.followed {
 			m.statusMsg = "Followed!"
-			if m.profileData != nil {
-				m.profileData.Viewer.Following = msg.followURI
-				m.profileData.FollowersCount++
-			}
 		} else {
 			m.statusMsg = "Unfollowed!"
-			if m.profileData != nil {
-				m.profileData.Viewer.Following = ""
-				if m.profileData.FollowersCount > 0 {
-					m.profileData.FollowersCount--
-				}
+		}
+		if m.profileData != nil {
+			m.profileData.Viewer.Following = msg.followURI
+			if msg.followed {
+				m.profileData.FollowersCount++
+			} else {
+				m.profileData.FollowersCount = decrement(m.profileData.FollowersCount)
 			}
 		}
 		return m, nil
@@ -549,22 +324,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.profileLoading = false
 		if msg.err == nil {
 			m.profileData = msg.profile
-		}
-		return m, nil
-
-	case fetchedAuthorFeedMsg:
-		m.profileFeedLoading[msg.tabType] = false
-		if msg.err == nil {
-			m.profileFeeds[msg.tabType] = msg.items
-			m.profileNextCursors[msg.tabType] = msg.cursor
-		}
-		return m, nil
-
-	case appendedAuthorFeedMsg:
-		m.profileFeedLoadingMore[msg.tabType] = false
-		if msg.err == nil {
-			m.profileFeeds[msg.tabType] = append(m.profileFeeds[msg.tabType], msg.items...)
-			m.profileNextCursors[msg.tabType] = msg.cursor
 		}
 		return m, nil
 	}
@@ -583,258 +342,167 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func decrement(n int) int {
+	if n > 0 {
+		return n - 1
+	}
+	return 0
+}
+
+// reportSearch turns the outcome of a search into a status message and, on the
+// first page, switches the timeline over to the results.
+func (m *Model) reportSearch(msg listMsg) {
+	if msg.err != nil {
+		if !msg.more {
+			m.inSearch = false
+			m.statusMsg = "Search failed: " + msg.err.Error()
+		}
+		return
+	}
+	if !msg.more {
+		m.search.top()
+		m.inSearch = true
+	}
+	m.statusMsg = fmt.Sprintf("Search: %q (%d results)", m.searchQuery, len(m.search.items))
+}
+
+func (m *Model) exitSearch() {
+	m.search = feedList{}
+	m.searchQuery = ""
+	m.inSearch = false
+	m.statusMsg = ""
+}
+
+func (m *Model) startCompose(replyTo *api.Post, from state) {
+	m.statusMsg = ""
+	m.replyTo = replyTo
+	m.prevState = from
+	m.state = stateCompose
+	m.composeErr = ""
+	m.compose.Reset()
+	m.compose.Focus()
+}
+
 func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		m.postSuccess = false
-		switch msg.String() {
-		case "q":
-			if m.inSearch {
-				m.inSearch = false
-				m.searchResults = nil
-				m.searchCursor = 0
-				m.searchQuery = ""
-				m.searchNextCursor = ""
-				m.searchLoadingMore = false
-				m.statusMsg = ""
-			} else {
-				return m, tea.Quit
-			}
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	m.postSuccess = false
+	list, id := m.currentList()
 
-		case "ctrl+c":
+	switch key.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+
+	case "q":
+		if !m.inSearch {
 			return m, tea.Quit
+		}
+		m.exitSearch()
 
-		case "esc":
-			if m.inSearch {
-				m.inSearch = false
-				m.searchResults = nil
-				m.searchCursor = 0
-				m.searchQuery = ""
-				m.searchNextCursor = ""
-				m.searchLoadingMore = false
-				m.statusMsg = ""
-			}
+	case "esc":
+		if m.inSearch {
+			m.exitSearch()
+		}
 
-		case "j":
+	case "j":
+		m.statusMsg = ""
+		if list.down() {
+			return m, m.loadMore(id, list.nextCursor)
+		}
+
+	case "k":
+		m.statusMsg = ""
+		list.up()
+
+	case "g":
+		m.statusMsg = ""
+		list.top()
+
+	case "G":
+		m.statusMsg = ""
+		list.bottom()
+
+	case "h":
+		if !m.inSearch && m.activeTab > 0 {
 			m.statusMsg = ""
-			if m.inSearch {
-				if m.searchCursor < len(m.searchResults)-1 {
-					m.searchCursor++
-				} else if !m.searchLoadingMore && m.searchNextCursor != "" {
-					m.searchLoadingMore = true
-					return m, m.loadMoreSearch(m.searchQuery, m.searchNextCursor)
-				}
-			} else {
-				feed := m.feeds[m.activeTab]
-				if m.cursor[m.activeTab] < len(feed)-1 {
-					m.cursor[m.activeTab]++
-				} else if !m.loadingMore[m.activeTab] && m.nextCursor[m.activeTab] != "" && m.activeTab != tabSaved {
-					m.loadingMore[m.activeTab] = true
-					return m, m.loadMoreFeed(m.activeTab, m.nextCursor[m.activeTab])
-				}
-			}
+			m.activeTab--
+		}
 
-		case "k":
+	case "l":
+		if !m.inSearch && m.activeTab < tabCount-1 {
 			m.statusMsg = ""
-			if m.inSearch {
-				if m.searchCursor > 0 {
-					m.searchCursor--
-				}
-			} else {
-				if m.cursor[m.activeTab] > 0 {
-					m.cursor[m.activeTab]--
-				}
-			}
+			m.activeTab++
+		}
 
-		case "h":
-			if !m.inSearch {
-				m.statusMsg = ""
-				if m.activeTab > 0 {
-					m.activeTab--
-				}
-			}
+	case "enter":
+		m.statusMsg = ""
+		if item, ok := list.selected(); ok {
+			m.detailItem = item
+			m.state = stateDetail
+			return m, m.fetchDetailImageCmd()
+		}
 
-		case "l":
-			if !m.inSearch {
-				m.statusMsg = ""
-				if m.activeTab < tabCount-1 {
-					m.activeTab++
-				}
-			}
+	case "u":
+		m.statusMsg = ""
+		if item, ok := list.selected(); ok {
+			return m.openUserProfile(item.Post.Author, stateTimeline)
+		}
 
-		case "enter":
+	case "c":
+		m.startCompose(nil, stateTimeline)
+
+	case "s":
+		m.state = stateSearch
+		m.searchInput.SetValue("")
+		m.searchInput.Focus()
+
+	case "r":
+		if !m.inSearch {
 			m.statusMsg = ""
-			if m.inSearch {
-				if len(m.searchResults) > 0 {
-					m.detailItem = m.searchResults[m.searchCursor]
-					m.state = stateDetail
-					return m, m.fetchDetailImageCmd()
-				}
-			} else {
-				feed := m.feeds[m.activeTab]
-				if len(feed) > 0 {
-					m.detailItem = feed[m.cursor[m.activeTab]]
-					m.state = stateDetail
-					return m, m.fetchDetailImageCmd()
-				}
-			}
-
-		case "c":
-			m.statusMsg = ""
-			m.prevState = stateTimeline
-			m.state = stateCompose
-			m.replyTo = nil
-			m.composeErr = ""
-			m.compose.Reset()
-			m.compose.Focus()
-
-		case "s":
-			m.state = stateSearch
-			m.searchInput.SetValue("")
-			m.searchInput.Focus()
-
-		case "r":
-			if !m.inSearch {
-				m.statusMsg = ""
-				m.loading[m.activeTab] = true
-				m.cursor[m.activeTab] = 0
-				if m.activeTab == tabSaved {
-					return m, m.loadBookmarks()
-				}
-				return m, m.fetchFeed(m.activeTab)
-			}
-
-		case "g":
-			m.statusMsg = ""
-			if m.inSearch {
-				m.searchCursor = 0
-			} else {
-				m.cursor[m.activeTab] = 0
-			}
-
-		case "G":
-			m.statusMsg = ""
-			if m.inSearch {
-				if len(m.searchResults) > 0 {
-					m.searchCursor = len(m.searchResults) - 1
-				}
-			} else {
-				feed := m.feeds[m.activeTab]
-				if len(feed) > 0 {
-					m.cursor[m.activeTab] = len(feed) - 1
-				}
-			}
-
-		case "u":
-			m.statusMsg = ""
-			var author api.Author
-			if m.inSearch {
-				if len(m.searchResults) > 0 {
-					author = m.searchResults[m.searchCursor].Post.Author
-				}
-			} else {
-				feed := m.feeds[m.activeTab]
-				if len(feed) > 0 {
-					author = feed[m.cursor[m.activeTab]].Post.Author
-				}
-			}
-			if author.DID != "" {
-				return m.openUserProfile(author, stateTimeline)
-			}
+			list.loading = true
+			list.top()
+			return m, m.loadFeed(m.activeTab, "")
 		}
 	}
 	return m, nil
 }
 
-func (m *Model) openUserProfile(author api.Author, prevState state) (tea.Model, tea.Cmd) {
-	m.profileActor = author.Handle
-	m.profileData = nil
-	m.profileFeeds = [profileTabCount][]api.FeedItem{}
-	m.profileCursors = [profileTabCount]int{}
-	m.profileNextCursors = [profileTabCount]string{}
-	m.profileFeedLoadingMore = [profileTabCount]bool{}
-	m.profileActiveTab = profileTabPosts
-	m.profileLoading = true
-	m.profileFeedLoading = [profileTabCount]bool{true, true}
-	m.profilePrevState = prevState
-	m.state = stateUserProfile
-	return m, tea.Batch(
-		m.fetchProfile(author.Handle),
-		m.fetchAuthorFeed(author.Handle, profileTabPosts),
-		m.fetchAuthorFeed(author.Handle, profileTabReplies),
-	)
-}
-
-func (m *Model) syncDetailItemToFeed() {
-	for t := tab(0); t < tabCount; t++ {
-		for i, item := range m.feeds[t] {
-			if item.Post.URI == m.detailItem.Post.URI {
-				m.feeds[t][i] = m.detailItem
-			}
-		}
-	}
-}
-
-func (m *Model) isBookmarked(uri string) bool {
-	for _, item := range m.feeds[tabSaved] {
-		if item.Post.URI == uri {
-			return true
-		}
-	}
-	return false
-}
-
 func (m *Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc", "q", "enter":
-			m.state = stateTimeline
-			m.statusMsg = ""
-			return m, tea.ClearScreen
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	post := m.detailItem.Post
 
-		case "l":
-			post := m.detailItem.Post
-			if post.Viewer.Like != "" {
-				return m, m.unlikePost(post.Viewer.Like)
-			}
-			return m, m.likePost(post.URI, post.CID)
+	switch key.String() {
+	case "esc", "q", "enter":
+		m.state = stateTimeline
+		m.statusMsg = ""
+		return m, tea.ClearScreen
 
-		case "r":
-			post := m.detailItem.Post
-			if post.Viewer.Repost != "" {
-				return m, m.unrepostPost(post.Viewer.Repost)
-			}
-			return m, m.repostPost(post.URI, post.CID)
+	case "l":
+		return m, m.toggleLike(post)
 
-		case "b":
-			post := m.detailItem.Post
-			if m.isBookmarked(post.URI) {
-				return m, m.unbookmarkPost(post.URI)
-			}
-			return m, m.bookmarkPost(m.detailItem)
+	case "r":
+		return m, m.toggleRepost(post)
 
-		case "c":
-			p := m.detailItem.Post
-			m.replyTo = &p
-			m.prevState = stateDetail
-			m.state = stateCompose
-			m.composeErr = ""
-			m.compose.Reset()
-			m.compose.Focus()
+	case "b":
+		return m, m.toggleBookmark(post)
 
-		case "u":
-			return m.openUserProfile(m.detailItem.Post.Author, stateDetail)
-		}
+	case "c":
+		m.startCompose(&post, stateDetail)
+
+	case "u":
+		return m.openUserProfile(post.Author, stateDetail)
 	}
 	return m, nil
 }
 
 func (m *Model) updateCompose(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
 		case "esc":
 			m.state = m.prevState
 			m.replyTo = nil
@@ -842,74 +510,70 @@ func (m *Model) updateCompose(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "ctrl+s":
 			text := strings.TrimSpace(m.compose.Value())
-			if text == "" {
+			switch {
+			case text == "":
 				m.composeErr = "Post cannot be empty"
 				return m, nil
-			}
-			if len([]rune(text)) > 300 {
+			case len([]rune(text)) > 300:
 				m.composeErr = "Post exceeds 300 characters"
 				return m, nil
 			}
 			return m, m.sendPost(text, m.replyTo)
 		}
 	}
+	var cmd tea.Cmd
 	m.compose, cmd = m.compose.Update(msg)
 	return m, cmd
 }
 
 func (m *Model) updateUserProfile(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "esc":
-			m.state = m.profilePrevState
-			m.statusMsg = ""
-		case "f":
-			if m.profileData == nil {
-				return m, nil
-			}
-			if m.profileData.Viewer.Following != "" {
-				return m, m.unfollowUser(m.profileData.Viewer.Following)
-			}
-			return m, m.followUser(m.profileData.DID)
-		case "h":
-			if m.profileActiveTab > 0 {
-				m.profileActiveTab--
-			}
-		case "l":
-			if m.profileActiveTab < profileTabCount-1 {
-				m.profileActiveTab++
-			}
-		case "j":
-			t := m.profileActiveTab
-			feed := m.profileFeeds[t]
-			if m.profileCursors[t] < len(feed)-1 {
-				m.profileCursors[t]++
-			} else if !m.profileFeedLoadingMore[t] && m.profileNextCursors[t] != "" {
-				m.profileFeedLoadingMore[t] = true
-				return m, m.loadMoreAuthorFeed(m.profileActor, t, m.profileNextCursors[t])
-			}
-		case "k":
-			if m.profileCursors[m.profileActiveTab] > 0 {
-				m.profileCursors[m.profileActiveTab]--
-			}
-		case "g":
-			m.profileCursors[m.profileActiveTab] = 0
-		case "G":
-			feed := m.profileFeeds[m.profileActiveTab]
-			if len(feed) > 0 {
-				m.profileCursors[m.profileActiveTab] = len(feed) - 1
-			}
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	list := &m.profileFeeds[m.profileActiveTab]
+
+	switch key.String() {
+	case "q", "esc":
+		m.state = m.profilePrevState
+		m.statusMsg = ""
+
+	case "f":
+		if m.profileData == nil {
+			return m, nil
 		}
+		return m, m.toggleFollow(m.profileData)
+
+	case "h":
+		if m.profileActiveTab > 0 {
+			m.profileActiveTab--
+		}
+
+	case "l":
+		if m.profileActiveTab < profileTabCount-1 {
+			m.profileActiveTab++
+		}
+
+	case "j":
+		if list.down() {
+			return m, m.loadMore(profileList(m.profileActiveTab), list.nextCursor)
+		}
+
+	case "k":
+		list.up()
+
+	case "g":
+		list.top()
+
+	case "G":
+		list.bottom()
 	}
 	return m, nil
 }
 
 func (m *Model) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
 		case "esc":
 			m.state = stateTimeline
 			return m, nil
@@ -919,702 +583,50 @@ func (m *Model) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.searchQuery = query
-			m.searchLoading = true
+			m.search.loading = true
 			m.inSearch = false
 			m.state = stateTimeline
-			return m, m.searchPosts(query)
+			return m, m.loadSearch(query, "")
 		}
 	}
+	var cmd tea.Cmd
 	m.searchInput, cmd = m.searchInput.Update(msg)
 	return m, cmd
 }
 
-func (m *Model) View() string {
-	if m.width == 0 {
-		return "Loading..."
-	}
+func (m *Model) openUserProfile(author api.Author, prevState state) (tea.Model, tea.Cmd) {
+	m.profileActor = author.Handle
+	m.profileData = nil
+	m.profileLoading = true
+	m.profileActiveTab = profileTabPosts
+	m.profileFeeds = [profileTabCount]feedList{{loading: true}, {loading: true}}
+	m.profilePrevState = prevState
+	m.state = stateUserProfile
 
-	if m.state == stateDetail || (m.state == stateCompose && m.prevState == stateDetail) {
-		base := m.renderDetailFull()
-		if m.state == stateCompose {
-			return m.renderOverlay(base)
-		}
-		return base
-	}
-
-	if m.state == stateUserProfile && m.profilePrevState == stateDetail {
-		base := m.renderDetailFull()
-		return m.renderUserProfile(base)
-	}
-
-	header := m.renderTabs()
-	footer := m.renderStatusBar()
-	help := m.renderHelpBar()
-	contentHeight := m.height - lipgloss.Height(header) - lipgloss.Height(footer) - lipgloss.Height(help)
-
-	timeline := lipgloss.NewStyle().Height(contentHeight).Render(m.renderTimeline(contentHeight))
-
-	base := lipgloss.JoinVertical(lipgloss.Left, header, timeline, help, footer)
-
-	if m.state == stateCompose {
-		return m.renderOverlay(base)
-	}
-	if m.state == stateSearch {
-		return m.renderSearchOverlay(base)
-	}
-	if m.state == stateUserProfile {
-		return m.renderUserProfile(base)
-	}
-	return base
+	return m, tea.Batch(
+		m.fetchProfile(author.Handle),
+		m.loadAuthorFeed(author.Handle, profileTabPosts, ""),
+		m.loadAuthorFeed(author.Handle, profileTabReplies, ""),
+	)
 }
 
-func (m *Model) renderTabs() string {
-	var line string
-	if m.searchLoading || m.inSearch {
-		line = activeTabStyle.Render("Search Result")
-	} else {
-		tabs := []string{"Home", "Discover", "Saved"}
-		var rendered []string
-		for i, name := range tabs {
-			if tab(i) == m.activeTab {
-				rendered = append(rendered, activeTabStyle.Render(name))
-			} else {
-				rendered = append(rendered, tabStyle.Render(name))
+// syncDetailItemToFeed writes the like/repost state edited in the detail view
+// back into every list that shows the same post.
+func (m *Model) syncDetailItemToFeed() {
+	for t := range m.feeds {
+		for i, item := range m.feeds[t].items {
+			if item.Post.URI == m.detailItem.Post.URI {
+				m.feeds[t].items[i] = m.detailItem
 			}
 		}
-		line = lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
 	}
-	if m.client != nil && m.client.Handle != "" {
-		account := handleStyle.Render("@" + m.client.Handle + " ")
-		if pad := m.width - lipgloss.Width(line) - lipgloss.Width(account); pad > 0 {
-			line += strings.Repeat(" ", pad) + account
+}
+
+func (m *Model) isBookmarked(uri string) bool {
+	for _, item := range m.feeds[tabSaved].items {
+		if item.Post.URI == uri {
+			return true
 		}
 	}
-	divider := dividerStyle.Render(strings.Repeat("─", m.width))
-	return lipgloss.JoinVertical(lipgloss.Left, line, divider)
-}
-
-// authorName returns the display name, falling back to the handle.
-func authorName(a api.Author) string {
-	if a.DisplayName != "" {
-		return a.DisplayName
-	}
-	return a.Handle
-}
-
-// relativeTime renders an RFC3339 timestamp as a compact age ("3m", "2h", "5d").
-// Returns "" when the timestamp is missing or unparsable.
-func relativeTime(createdAt string) string {
-	t, err := time.Parse(time.RFC3339, createdAt)
-	if err != nil {
-		return ""
-	}
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	case d < 7*24*time.Hour:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
-	return t.Format("Jan 2")
-}
-
-// renderPostHeader renders "name @handle" on the left and the post age on the right.
-func renderPostHeader(post api.Post, width int, nameSt, handleSt lipgloss.Style) string {
-	left := nameSt.Render(ansi.Truncate(authorName(post.Author), 24, "…")) +
-		" " + handleSt.Render("@"+ansi.Truncate(post.Author.Handle, 30, "…"))
-	age := relativeTime(post.Record.CreatedAt)
-	if age == "" {
-		return left
-	}
-	right := timeStyle.Render(age)
-	pad := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if pad < 1 {
-		return left
-	}
-	return left + strings.Repeat(" ", pad) + right
-}
-
-// renderPostMeta renders the counters line, omitting anything that is zero so
-// that quiet posts stay visually quiet. Returns "" when there is nothing to show.
-func (m *Model) renderPostMeta(post api.Post) string {
-	var parts []string
-	if post.Record.Reply != nil {
-		parts = append(parts, metaStyle.Render("↩ reply"))
-	}
-	if post.LikeCount > 0 || post.Viewer.Like != "" {
-		st := metaStyle
-		if post.Viewer.Like != "" {
-			st = likedStyle
-		}
-		parts = append(parts, st.Render(fmt.Sprintf("♥ %d", post.LikeCount)))
-	}
-	if post.RepostCount > 0 || post.Viewer.Repost != "" {
-		st := metaStyle
-		if post.Viewer.Repost != "" {
-			st = repostedStyle
-		}
-		parts = append(parts, st.Render(fmt.Sprintf("↺ %d", post.RepostCount)))
-	}
-	if post.ReplyCount > 0 {
-		parts = append(parts, metaStyle.Render(fmt.Sprintf("✦ %d", post.ReplyCount)))
-	}
-	if n := len(post.Embed.EmbedImages()); n > 0 {
-		parts = append(parts, metaStyle.Render(fmt.Sprintf("🖼 %d", n)))
-	}
-	if m.isBookmarked(post.URI) {
-		parts = append(parts, bookmarkedStyle.Render("★"))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.Join(parts, metaStyle.Render("  "))
-}
-
-// renderFeedItem renders a single feed item as a styled post box of the given
-// outer width (border and padding included).
-func (m *Model) renderFeedItem(item api.FeedItem, selected bool, width int) string {
-	nameSt, handleSt, textSt := authorStyle, handleStyle, textStyle
-	boxSt := postStyle
-	if selected {
-		nameSt, handleSt, textSt = selectedAuthorStyle, selectedHandleStyle, selectedTextStyle
-		boxSt = selectedPostStyle
-	}
-
-	inner := width - 2 // horizontal padding (2); the left border sits outside Width
-	if inner < 20 {
-		inner = 20
-	}
-
-	post := item.Post
-	parts := []string{
-		renderPostHeader(post, inner, nameSt, handleSt),
-		renderTextWithURLsStyled(post.Record.Text, inner, textSt),
-	}
-	if meta := m.renderPostMeta(post); meta != "" {
-		parts = append(parts, meta)
-	}
-
-	return boxSt.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
-}
-
-// fillFeedToHeight renders feed items around cur, expanding to fill height lines.
-// Posts that don't fully fit are truncated so the terminal is always filled.
-func (m *Model) fillFeedToHeight(feed []api.FeedItem, cur, height int) []string {
-	if len(feed) == 0 {
-		return nil
-	}
-
-	truncateToLines := func(s string, n int) string {
-		if n <= 0 {
-			return ""
-		}
-		ls := strings.Split(s, "\n")
-		if len(ls) <= n {
-			return s
-		}
-		return strings.Join(ls[:n], "\n")
-	}
-
-	// strings.Join(lines, "\n") does NOT add extra lines:
-	// height(join([r1,r2],"\n")) == height(r1) + height(r2).
-	// So usedHeight is simply the sum of individual post heights.
-
-	var forward []string
-	usedHeight := 0
-	for i := cur; i < len(feed); i++ {
-		r := m.renderFeedItem(feed[i], i == cur, m.width-4)
-		h := lipgloss.Height(r)
-		remaining := height - usedHeight
-		if remaining <= 0 {
-			break
-		}
-		if h > remaining {
-			// Truncate to fill the rest of the screen, then stop
-			forward = append(forward, truncateToLines(r, remaining))
-			usedHeight += remaining
-			break
-		}
-		usedHeight += h
-		forward = append(forward, r)
-	}
-
-	// Fill remaining space by expanding backward from cursor-1
-	var backward []string
-	for i := cur - 1; i >= 0; i-- {
-		r := m.renderFeedItem(feed[i], false, m.width-4)
-		h := lipgloss.Height(r)
-		if usedHeight+h > height {
-			break
-		}
-		usedHeight += h
-		backward = append(backward, r)
-	}
-
-	// Combine: backward entries are in reverse order, prepend them
-	lines := make([]string, 0, len(backward)+len(forward))
-	for j := len(backward) - 1; j >= 0; j-- {
-		lines = append(lines, backward[j])
-	}
-	lines = append(lines, forward...)
-	return lines
-}
-
-func (m *Model) renderSearchResults(height int) string {
-	if m.searchLoading {
-		return lipgloss.NewStyle().
-			Padding(1, 2).
-			Foreground(colorMuted).
-			Render("Searching...")
-	}
-
-	feed := m.searchResults
-	if len(feed) == 0 {
-		return lipgloss.NewStyle().
-			Padding(1, 2).
-			Foreground(colorMuted).
-			Render("No results found.")
-	}
-
-	lines := m.fillFeedToHeight(feed, m.searchCursor, height)
-	result := strings.Join(lines, "\n")
-	if m.searchLoadingMore {
-		result += "\n" + lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("Loading more...")
-	}
-	return result
-}
-
-func (m *Model) renderTimeline(height int) string {
-	if m.searchLoading || m.inSearch {
-		return m.renderSearchResults(height)
-	}
-
-	t := m.activeTab
-	if m.loading[t] {
-		return lipgloss.NewStyle().
-			Padding(1, 2).
-			Foreground(colorMuted).
-			Render("Loading...")
-	}
-	if m.fetchErr[t] != "" {
-		return errorStyle.Padding(1, 2).Render("Error: " + m.fetchErr[t])
-	}
-
-	feed := m.feeds[t]
-	if len(feed) == 0 {
-		return lipgloss.NewStyle().
-			Padding(1, 2).
-			Foreground(colorMuted).
-			Render("No posts yet.")
-	}
-
-	cur := m.cursor[t]
-	lines := m.fillFeedToHeight(feed, cur, height)
-	result := strings.Join(lines, "\n")
-	if m.loadingMore[t] {
-		loadingLine := lipgloss.NewStyle().
-			Foreground(colorMuted).
-			Padding(0, 2).
-			Render("Loading more...")
-		result += "\n" + loadingLine
-	}
-	return result
-}
-
-func (m *Model) renderDetailFull() string {
-	post := m.detailItem.Post
-
-	header := renderPostHeader(post, m.width-6, selectedAuthorStyle, selectedHandleStyle)
-	body := renderTextWithURLsStyled(post.Record.Text, m.width-6, selectedTextStyle)
-
-	// Stats and help are rendered outside the postBox so the image can sit between them.
-	stats := lipgloss.NewStyle().Padding(0, 1).Render(m.renderPostMeta(post))
-
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		"",
-		body,
-	)
-
-	postBox := selectedPostStyle.Width(m.width - 4).Render(content)
-
-	var statusLine string
-	if m.statusMsg != "" {
-		statusLine = successStyle.Render("  " + m.statusMsg)
-	}
-
-	divider := dividerStyle.Render(strings.Repeat("─", m.width))
-	help := lipgloss.NewStyle().Width(m.width).Padding(0, 1).Render(
-		keyHints("l", "like", "r", "repost", "b", "bookmark", "c", "comment", "u", "profile", "⏎/esc", "back"))
-	footer := statusBarStyle.Width(m.width).Render("")
-
-	// Build the top section (everything above the image).
-	topParts := []string{divider, postBox}
-	if statusLine != "" {
-		topParts = append(topParts, statusLine)
-	}
-	top := lipgloss.JoinVertical(lipgloss.Left, topParts...)
-
-	// Fixed rows at the bottom: stats (1) + help (1) + footer (1).
-	const fixedBottomRows = 3
-	availableForImage := m.height - lipgloss.Height(top) - fixedBottomRows
-	if availableForImage < 0 {
-		availableForImage = 0
-	}
-
-	// Build image section if an embed image exists, padded to exactly availableForImage rows
-	// so that stats/help/footer always appear at a stable position below the image area.
-	maxCols := m.width - 4
-	if maxCols < 20 {
-		maxCols = 20
-	}
-
-	// Build image block: always exactly availableForImage rows (availableForImage-1 \n chars).
-	var imgBlock string
-	embedImgs := post.Embed.EmbedImages()
-	if len(embedImgs) > 0 && availableForImage > 0 {
-		imgURL := embedImgs[0].Fullsize
-		if imgURL == "" {
-			imgURL = embedImgs[0].Thumb
-		}
-		if img, ok := m.imageCache[imgURL]; ok {
-			// Render at display time so size always matches current available space.
-			imgBlock = renderImageForView(img, maxCols, availableForImage)
-		} else if errMsg, hasErr := m.imageError[imgURL]; hasErr {
-			imgBlock = errorStyle.Padding(0, 2).Render("🖼 image load error: " + errMsg)
-			imgBlock += strings.Repeat("\n", availableForImage-1)
-		} else {
-			imgBlock = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("🖼 loading...")
-			imgBlock += strings.Repeat("\n", availableForImage-1)
-		}
-	} else if availableForImage > 0 {
-		imgBlock = strings.Repeat("\n", availableForImage-1)
-	}
-
-	result := top
-	if imgBlock != "" {
-		result += "\n" + imgBlock
-	}
-	result += "\n" + stats + "\n" + help + "\n" + footer
-	return result
-}
-
-func (m *Model) fetchDetailImageCmd() tea.Cmd {
-	imgs := m.detailItem.Post.Embed.EmbedImages()
-	if len(imgs) == 0 {
-		return nil
-	}
-	imgURL := imgs[0].Fullsize
-	if imgURL == "" {
-		imgURL = imgs[0].Thumb
-	}
-	if imgURL == "" {
-		return nil
-	}
-	if _, cached := m.imageCache[imgURL]; cached {
-		return nil
-	}
-	if m.imageLoading[imgURL] {
-		return nil
-	}
-	if _, hasErr := m.imageError[imgURL]; hasErr {
-		return nil
-	}
-	m.imageLoading[imgURL] = true
-	return fetchDetailImage(imgURL)
-}
-
-// keyHints renders alternating key/description pairs as a dimmed hint line
-// with the keys highlighted.
-func keyHints(pairs ...string) string {
-	var parts []string
-	for i := 0; i+1 < len(pairs); i += 2 {
-		parts = append(parts, keyStyle.Render(pairs[i])+" "+keyDescStyle.Render(pairs[i+1]))
-	}
-	return strings.Join(parts, keyDescStyle.Render(" · "))
-}
-
-func (m *Model) renderHelpBar() string {
-	var keys string
-	if m.inSearch {
-		keys = keyHints("j/k", "scroll", "⏎", "detail", "u", "profile", "s", "new search", "esc", "clear", "q", "quit")
-	} else {
-		keys = keyHints("j/k", "scroll", "h/l", "tab", "⏎", "detail", "u", "profile", "c", "post", "s", "search", "r", "refresh", "q", "quit")
-	}
-	return lipgloss.NewStyle().Width(m.width).Padding(0, 1).Render(keys)
-}
-
-func (m *Model) renderSearchOverlay(base string) string {
-	overlayW := m.width / 2
-	if overlayW < 50 {
-		overlayW = 50
-	}
-
-	help := keyHints("⏎", "search", "esc", "cancel")
-
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		composeTitleStyle.Render("Search Posts"),
-		m.searchInput.View(),
-		help,
-	)
-
-	overlay := overlayStyle.Width(overlayW).Render(content)
-
-	return lipgloss.Place(m.width, m.height,
-		lipgloss.Center, lipgloss.Center,
-		overlay,
-		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("#000000")),
-	)
-}
-
-func (m *Model) renderStatusBar() string {
-	var msg string
-	if m.statusMsg != "" {
-		if m.postSuccess {
-			msg = successStyle.Render(m.statusMsg)
-		} else {
-			msg = m.statusMsg
-		}
-	}
-	return statusBarStyle.Width(m.width).Render(msg)
-}
-
-func (m *Model) renderOverlay(base string) string {
-	overlayW := m.width/2 + 4
-	if overlayW < 50 {
-		overlayW = 50
-	}
-
-	charCount := len([]rune(m.compose.Value()))
-	remaining := 300 - charCount
-	countColor := colorSubtext
-	if remaining < 20 {
-		countColor = colorError
-	}
-
-	countStr := lipgloss.NewStyle().Foreground(countColor).
-		Render(fmt.Sprintf("%d/300", charCount))
-
-	var errLine string
-	if m.composeErr != "" {
-		errLine = "\n" + errorStyle.Render(m.composeErr)
-	}
-
-	help := keyHints("ctrl+s", "post", "esc", "cancel")
-
-	title := "New Post"
-	if m.replyTo != nil {
-		replyName := m.replyTo.Author.DisplayName
-		if replyName == "" {
-			replyName = m.replyTo.Author.Handle
-		}
-		title = "Reply to " + replyName
-	}
-
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		composeTitleStyle.Render(title),
-		m.compose.View(),
-		lipgloss.JoinHorizontal(lipgloss.Top, countStr,
-			lipgloss.NewStyle().Render(strings.Repeat(" ", overlayW-20-lipgloss.Width(countStr))),
-			help),
-		errLine,
-	)
-
-	overlay := overlayStyle.Width(overlayW).Render(content)
-
-	return lipgloss.Place(m.width, m.height,
-		lipgloss.Center, lipgloss.Center,
-		overlay,
-		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("#000000")),
-	)
-}
-
-func (m *Model) renderUserProfile(base string) string {
-	overlayW := m.width * 4 / 5
-	if overlayW < 66 {
-		overlayW = 66
-	}
-	overlayH := m.height * 4 / 5
-	if overlayH < 20 {
-		overlayH = 20
-	}
-	innerW := overlayW - 6 // border(2) + padding(4)
-
-	// Profile header
-	var headerParts []string
-	if m.profileLoading {
-		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(colorMuted).Render("Loading profile..."))
-	} else if m.profileData == nil {
-		headerParts = append(headerParts, lipgloss.NewStyle().Foreground(colorError).Render("Failed to load profile"))
-	} else {
-		p := m.profileData
-		name := p.DisplayName
-		if name == "" {
-			name = p.Handle
-		}
-		title := selectedAuthorStyle.Render(name) + " " + handleStyle.Render("@"+p.Handle)
-		if p.Viewer.Following != "" {
-			title += "  " + successStyle.Render("✓ following")
-		}
-		headerParts = append(headerParts, title)
-		headerParts = append(headerParts, metaStyle.Render(fmt.Sprintf(
-			"%d followers  ·  %d following  ·  %d posts",
-			p.FollowersCount, p.FollowsCount, p.PostsCount,
-		)))
-	}
-	header := strings.Join(headerParts, "\n")
-
-	// Tab bar
-	var tabPosts, tabReplies string
-	if m.profileActiveTab == profileTabPosts {
-		tabPosts = activeTabStyle.Render("Posts")
-		tabReplies = tabStyle.Render("Replies")
-	} else {
-		tabPosts = tabStyle.Render("Posts")
-		tabReplies = activeTabStyle.Render("Replies")
-	}
-	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabPosts, tabReplies)
-
-	divider := dividerStyle.Render(strings.Repeat("─", innerW))
-	help := keyHints("h/l", "tab", "j/k", "scroll", "f", "follow", "q", "back")
-
-	// Measure non-posts content height accurately
-	frameContent := lipgloss.JoinVertical(lipgloss.Left, header, "", tabBar, divider, help)
-	// border(2) + padding top+bottom(2)
-	postsHeight := overlayH - lipgloss.Height(frameContent) - 4
-	if postsHeight < 3 {
-		postsHeight = 3
-	}
-
-	postsContent := m.renderProfilePosts(innerW, postsHeight)
-
-	// Clip to exact postsHeight lines so overlay size stays fixed
-	postsLines := strings.Split(postsContent, "\n")
-	if len(postsLines) > postsHeight {
-		postsLines = postsLines[:postsHeight]
-	}
-	for len(postsLines) < postsHeight {
-		postsLines = append(postsLines, "")
-	}
-	postsContent = strings.Join(postsLines, "\n")
-
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		"",
-		tabBar,
-		divider,
-		postsContent,
-		help,
-	)
-
-	overlay := overlayStyle.Width(innerW).Render(content)
-
-	return lipgloss.Place(m.width, m.height,
-		lipgloss.Center, lipgloss.Center,
-		overlay,
-		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("#000000")),
-	)
-}
-
-func (m *Model) renderProfilePosts(width, height int) string {
-	if m.profileFeedLoading[m.profileActiveTab] {
-		return lipgloss.NewStyle().Foreground(colorMuted).Render("Loading posts...")
-	}
-
-	feed := m.profileFeeds[m.profileActiveTab]
-	if len(feed) == 0 {
-		return lipgloss.NewStyle().Foreground(colorMuted).Render("No posts.")
-	}
-
-	cur := m.profileCursors[m.profileActiveTab]
-	linesPerPost := 4 // author + text + stats + border spacing
-	visiblePosts := height / linesPerPost
-	if visiblePosts < 1 {
-		visiblePosts = 1
-	}
-
-	start := 0
-	if cur >= visiblePosts {
-		start = cur - visiblePosts/2
-	}
-	end := start + visiblePosts + 1
-	if end > len(feed) {
-		end = len(feed)
-	}
-
-	var lines []string
-	for i := start; i < end; i++ {
-		lines = append(lines, m.renderFeedItem(feed[i], i == cur, width-4))
-	}
-	result := strings.Join(lines, "\n")
-	if m.profileFeedLoadingMore[m.profileActiveTab] {
-		result += "\n" + lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("Loading more...")
-	}
-	return result
-}
-
-func filterSearchResults(items []api.FeedItem, query string) []api.FeedItem {
-	q := strings.ToLower(query)
-	var filtered []api.FeedItem
-	for _, item := range items {
-		if strings.Contains(strings.ToLower(item.Post.Record.Text), q) {
-			filtered = append(filtered, item)
-		}
-	}
-	return filtered
-}
-
-// renderTextWithURLsStyled wraps text and renders URLs as OSC 8 terminal
-// hyperlinks (underlined, primary color). Shift+click opens the URL in the browser.
-func renderTextWithURLsStyled(text string, width int, ts lipgloss.Style) string {
-	wrapped := wrapText(text, width)
-	matches := urlRegex.FindAllStringIndex(wrapped, -1)
-	if len(matches) == 0 {
-		return renderLines(ts, wrapped)
-	}
-
-	var b strings.Builder
-	last := 0
-	for _, m := range matches {
-		start, end := m[0], m[1]
-		if start > last {
-			b.WriteString(renderLines(ts, wrapped[last:start]))
-		}
-		rawURL := wrapped[start:end]
-		styled := linkStyle.Render(rawURL)
-		// OSC 8 hyperlink: \033]8;;URL\a + visible text + \033]8;;\a
-		b.WriteString("\033]8;;" + rawURL + "\a" + styled + "\033]8;;\a")
-		last = end
-	}
-	if last < len(wrapped) {
-		b.WriteString(renderLines(ts, wrapped[last:]))
-	}
-	return b.String()
-}
-
-// renderLines styles each line individually. Rendering a multi-line string in
-// one call would make lipgloss pad every line to the block width, which
-// misplaces text that follows on the same line (e.g. a URL after a wrap).
-func renderLines(st lipgloss.Style, s string) string {
-	lines := strings.Split(s, "\n")
-	for i, l := range lines {
-		lines[i] = st.Render(l)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func wrapText(text string, width int) string {
-	if width <= 0 {
-		return text
-	}
-	// ansi.Wrap is display-width aware, so CJK (2-cell) runes and words without
-	// spaces wrap correctly instead of overflowing the post box.
-	return ansi.Wrap(text, width, "")
+	return false
 }
