@@ -7,135 +7,64 @@ import (
 	"github.com/jedipunkz/bsky/internal/api"
 )
 
-func (m *Model) fetchFeed(t tab) tea.Cmd {
-	client := m.client
+const (
+	feedPageSize   = 50
+	searchPageSize = 25
+)
+
+// fetchList runs fn off the update loop and delivers the page it returns to the
+// list identified by id. more marks a next-page fetch, which appends.
+func fetchList(id listID, more bool, fn func() ([]api.FeedItem, string, error)) tea.Cmd {
 	return func() tea.Msg {
-		var items []api.FeedItem
-		var cursor string
-		var err error
-		if t == tabHome {
-			items, cursor, err = client.GetTimeline(50, "")
-		} else {
-			items, cursor, err = client.GetDiscoverFeed(50, "")
+		items, cursor, err := fn()
+		return listMsg{id: id, more: more, items: items, cursor: cursor, err: err}
+	}
+}
+
+// loadFeed fetches a timeline tab. An empty cursor loads the first page.
+func (m *Model) loadFeed(t tab, cursor string) tea.Cmd {
+	client := m.client
+	return fetchList(timelineList(t), cursor != "", func() ([]api.FeedItem, string, error) {
+		switch t {
+		case tabSaved:
+			// Bookmarks are shown as a single page: no cursor is carried over.
+			items, _, err := client.GetBookmarks(feedPageSize, "")
+			return items, "", err
+		case tabDiscover:
+			return client.GetDiscoverFeed(feedPageSize, cursor)
+		default:
+			return client.GetTimeline(feedPageSize, cursor)
 		}
-		return fetchedMsg{tab: t, items: items, cursor: cursor, err: err}
-	}
+	})
 }
 
-func (m *Model) loadMoreFeed(t tab, cursor string) tea.Cmd {
+func (m *Model) loadSearch(query, cursor string) tea.Cmd {
 	client := m.client
-	return func() tea.Msg {
-		var items []api.FeedItem
-		var nextCursor string
-		var err error
-		if t == tabHome {
-			items, nextCursor, err = client.GetTimeline(50, cursor)
-		} else {
-			items, nextCursor, err = client.GetDiscoverFeed(50, cursor)
+	return fetchList(searchList, cursor != "", func() ([]api.FeedItem, string, error) {
+		items, next, err := client.SearchPosts(query, searchPageSize, cursor)
+		return filterSearchResults(items, query), next, err
+	})
+}
+
+func (m *Model) loadAuthorFeed(actor string, tabType profileTabType, cursor string) tea.Cmd {
+	client := m.client
+	return fetchList(profileList(tabType), cursor != "", func() ([]api.FeedItem, string, error) {
+		items, next, err := client.GetAuthorFeed(actor, authorFeedFilter(tabType), feedPageSize, cursor)
+		return filterReplies(items, tabType), next, err
+	})
+}
+
+// filterSearchResults drops posts that do not contain the query, which the
+// search endpoint returns for fuzzy matches.
+func filterSearchResults(items []api.FeedItem, query string) []api.FeedItem {
+	q := strings.ToLower(query)
+	var filtered []api.FeedItem
+	for _, item := range items {
+		if strings.Contains(strings.ToLower(item.Post.Record.Text), q) {
+			filtered = append(filtered, item)
 		}
-		return appendedMsg{tab: t, items: items, cursor: nextCursor, err: err}
 	}
-}
-
-func (m *Model) sendPost(text string, replyTo *api.Post) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		var err error
-		if replyTo != nil {
-			err = client.CreateReply(text, replyTo.URI, replyTo.CID)
-		} else {
-			err = client.CreatePost(text)
-		}
-		return postSentMsg{err: err}
-	}
-}
-
-func (m *Model) likePost(uri, cid string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		likeURI, err := client.Like(uri, cid)
-		return likeMsg{err: err, likeURI: likeURI, liked: true}
-	}
-}
-
-func (m *Model) unlikePost(likeURI string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		err := client.Unlike(likeURI)
-		return likeMsg{err: err, liked: false}
-	}
-}
-
-func (m *Model) repostPost(uri, cid string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		repostURI, err := client.Repost(uri, cid)
-		return repostMsg{err: err, repostURI: repostURI, reposted: true}
-	}
-}
-
-func (m *Model) unrepostPost(repostURI string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		err := client.Unrepost(repostURI)
-		return repostMsg{err: err, reposted: false}
-	}
-}
-
-func (m *Model) bookmarkPost(item api.FeedItem) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		err := client.CreateBookmark(item.Post.URI, item.Post.CID)
-		return bookmarkMsg{err: err, bookmarked: true}
-	}
-}
-
-func (m *Model) unbookmarkPost(postURI string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		err := client.DeleteBookmark(postURI)
-		return bookmarkMsg{err: err, bookmarked: false}
-	}
-}
-
-func (m *Model) searchPosts(query string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		items, cursor, err := client.SearchPosts(query, 25, "")
-		return searchMsg{items: items, cursor: cursor, err: err}
-	}
-}
-
-func (m *Model) loadMoreSearch(query, cursor string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		items, nextCursor, err := client.SearchPosts(query, 25, cursor)
-		return appendSearchMsg{items: items, cursor: nextCursor, err: err}
-	}
-}
-
-func (m *Model) followUser(did string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		followURI, err := client.Follow(did)
-		return followMsg{err: err, followURI: followURI, followed: true}
-	}
-}
-
-func (m *Model) unfollowUser(followURI string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		err := client.Unfollow(followURI)
-		return followMsg{err: err, followed: false}
-	}
-}
-
-func (m *Model) fetchProfile(actor string) tea.Cmd {
-	client := m.client
-	return func() tea.Msg {
-		profile, err := client.GetProfile(actor)
-		return fetchedProfileMsg{profile: profile, err: err}
-	}
+	return filtered
 }
 
 func authorFeedFilter(tabType profileTabType) string {
@@ -145,6 +74,8 @@ func authorFeedFilter(tabType profileTabType) string {
 	return "posts_with_replies"
 }
 
+// filterReplies keeps only replies on the profile's Replies tab; the endpoint
+// returns posts and replies together.
 func filterReplies(items []api.FeedItem, tabType profileTabType) []api.FeedItem {
 	if tabType != profileTabReplies {
 		return items
@@ -158,49 +89,79 @@ func filterReplies(items []api.FeedItem, tabType profileTabType) []api.FeedItem 
 	return replies
 }
 
-func (m *Model) fetchAuthorFeed(actor string, tabType profileTabType) tea.Cmd {
+func (m *Model) fetchProfile(actor string) tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
-		items, cursor, err := client.GetAuthorFeed(actor, authorFeedFilter(tabType), 50, "")
-		if err != nil {
-			return fetchedAuthorFeedMsg{tabType: tabType, err: err}
-		}
-		return fetchedAuthorFeedMsg{tabType: tabType, items: filterReplies(items, tabType), cursor: cursor}
+		profile, err := client.GetProfile(actor)
+		return fetchedProfileMsg{profile: profile, err: err}
 	}
 }
 
-func (m *Model) loadMoreAuthorFeed(actor string, tabType profileTabType, cursor string) tea.Cmd {
+func (m *Model) sendPost(text string, replyTo *api.Post) tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
-		items, nextCursor, err := client.GetAuthorFeed(actor, authorFeedFilter(tabType), 50, cursor)
-		if err != nil {
-			return appendedAuthorFeedMsg{tabType: tabType, err: err}
+		if replyTo != nil {
+			return postSentMsg{err: client.CreateReply(text, replyTo.URI, replyTo.CID)}
 		}
-		return appendedAuthorFeedMsg{tabType: tabType, items: filterReplies(items, tabType), cursor: nextCursor}
+		return postSentMsg{err: client.CreatePost(text)}
 	}
 }
 
-func (m *Model) loadBookmarks() tea.Cmd {
+func (m *Model) toggleLike(post api.Post) tea.Cmd {
 	client := m.client
-	return func() tea.Msg {
-		items, cursor, err := client.GetBookmarks(50, "")
-		if err != nil {
-			return fetchedMsg{tab: tabSaved, err: err}
+	if post.Viewer.Like != "" {
+		return func() tea.Msg {
+			return likeMsg{err: client.Unlike(post.Viewer.Like)}
 		}
-		return fetchedMsg{tab: tabSaved, items: items, cursor: cursor}
+	}
+	return func() tea.Msg {
+		likeURI, err := client.Like(post.URI, post.CID)
+		return likeMsg{err: err, likeURI: likeURI, liked: true}
 	}
 }
 
-func fetchDetailImage(url string) tea.Cmd {
-	return func() tea.Msg {
-		img, err := downloadImage(url)
-		if err != nil {
-			return imageFetchedMsg{url: url, err: err}
+func (m *Model) toggleRepost(post api.Post) tea.Cmd {
+	client := m.client
+	if post.Viewer.Repost != "" {
+		return func() tea.Msg {
+			return repostMsg{err: client.Unrepost(post.Viewer.Repost)}
 		}
-		return imageFetchedMsg{url: url, img: img}
+	}
+	return func() tea.Msg {
+		repostURI, err := client.Repost(post.URI, post.CID)
+		return repostMsg{err: err, repostURI: repostURI, reposted: true}
 	}
 }
 
+func (m *Model) toggleBookmark(post api.Post) tea.Cmd {
+	client := m.client
+	if m.isBookmarked(post.URI) {
+		return func() tea.Msg {
+			return bookmarkMsg{err: client.DeleteBookmark(post.URI)}
+		}
+	}
+	return func() tea.Msg {
+		return bookmarkMsg{err: client.CreateBookmark(post.URI, post.CID), bookmarked: true}
+	}
+}
+
+func (m *Model) toggleFollow(profile *api.Profile) tea.Cmd {
+	client := m.client
+	if profile.Viewer.Following != "" {
+		followURI := profile.Viewer.Following
+		return func() tea.Msg {
+			return followMsg{err: client.Unfollow(followURI)}
+		}
+	}
+	did := profile.DID
+	return func() tea.Msg {
+		followURI, err := client.Follow(did)
+		return followMsg{err: err, followURI: followURI, followed: true}
+	}
+}
+
+// fetchDetailImageCmd downloads the first embedded image of the post open in
+// the detail view, unless it is already cached, loading or known to fail.
 func (m *Model) fetchDetailImageCmd() tea.Cmd {
 	imgs := m.detailItem.Post.Embed.EmbedImages()
 	if len(imgs) == 0 {
@@ -223,16 +184,9 @@ func (m *Model) fetchDetailImageCmd() tea.Cmd {
 		return nil
 	}
 	m.imageLoading[imgURL] = true
-	return fetchDetailImage(imgURL)
-}
 
-func filterSearchResults(items []api.FeedItem, query string) []api.FeedItem {
-	q := strings.ToLower(query)
-	var filtered []api.FeedItem
-	for _, item := range items {
-		if strings.Contains(strings.ToLower(item.Post.Record.Text), q) {
-			filtered = append(filtered, item)
-		}
+	return func() tea.Msg {
+		img, err := downloadImage(imgURL)
+		return imageFetchedMsg{url: imgURL, img: img, err: err}
 	}
-	return filtered
 }

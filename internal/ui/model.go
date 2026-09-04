@@ -38,8 +38,31 @@ const (
 	profileTabCount
 )
 
-type fetchedMsg struct {
-	tab    tab
+// listID addresses one of the model's feed lists, so a command started now can
+// deliver its page to the right list later.
+type listID struct {
+	kind listKind
+	idx  int
+}
+
+type listKind int
+
+const (
+	listTimeline listKind = iota
+	listProfile
+	listSearch
+)
+
+func timelineList(t tab) listID            { return listID{kind: listTimeline, idx: int(t)} }
+func profileList(pt profileTabType) listID { return listID{kind: listProfile, idx: int(pt)} }
+
+var searchList = listID{kind: listSearch}
+
+// listMsg carries a fetched page back to the list it was requested for. more
+// marks a next-page fetch, which appends instead of replacing.
+type listMsg struct {
+	id     listID
+	more   bool
 	items  []api.FeedItem
 	cursor string
 	err    error
@@ -72,47 +95,14 @@ type bookmarkMsg struct {
 	bookmarked bool
 }
 
-type appendedMsg struct {
-	tab    tab
-	items  []api.FeedItem
-	cursor string
-	err    error
-}
-
-type searchMsg struct {
-	items  []api.FeedItem
-	cursor string
-	err    error
-}
-
-type appendSearchMsg struct {
-	items  []api.FeedItem
-	cursor string
-	err    error
-}
-
-type fetchedProfileMsg struct {
-	profile *api.Profile
-	err     error
-}
-
 type followMsg struct {
 	err       error
 	followURI string
 	followed  bool
 }
 
-type fetchedAuthorFeedMsg struct {
-	tabType profileTabType
-	items   []api.FeedItem
-	cursor  string
-	err     error
-}
-
-type appendedAuthorFeedMsg struct {
-	tabType profileTabType
-	items   []api.FeedItem
-	cursor  string
+type fetchedProfileMsg struct {
+	profile *api.Profile
 	err     error
 }
 
@@ -124,12 +114,12 @@ type Model struct {
 	state     state
 	prevState state
 
-	feeds       [tabCount][]api.FeedItem
-	cursor      [tabCount]int
-	loading     [tabCount]bool
-	loadingMore [tabCount]bool
-	nextCursor  [tabCount]string
-	fetchErr    [tabCount]string
+	feeds [tabCount]feedList
+
+	search      feedList
+	searchInput textinput.Model
+	searchQuery string
+	inSearch    bool
 
 	detailItem api.FeedItem
 	replyTo    *api.Post
@@ -138,27 +128,14 @@ type Model struct {
 	composeErr  string
 	postSuccess bool
 
-	searchInput       textinput.Model
-	searchResults     []api.FeedItem
-	searchCursor      int
-	searchLoading     bool
-	searchLoadingMore bool
-	searchNextCursor  string
-	inSearch          bool
-	searchQuery       string
-
 	statusMsg string
 
-	profileActor           string
-	profileData            *api.Profile
-	profileActiveTab       profileTabType
-	profileFeeds           [profileTabCount][]api.FeedItem
-	profileCursors         [profileTabCount]int
-	profileLoading         bool
-	profileFeedLoading     [profileTabCount]bool
-	profileFeedLoadingMore [profileTabCount]bool
-	profileNextCursors     [profileTabCount]string
-	profilePrevState       state
+	profileActor     string
+	profileData      *api.Profile
+	profileLoading   bool
+	profileActiveTab profileTabType
+	profileFeeds     [profileTabCount]feedList
+	profilePrevState state
 
 	imageCache   map[string]image.Image // URL -> decoded image (rendered at display time)
 	imageLoading map[string]bool        // URL -> loading in progress
@@ -191,10 +168,43 @@ func New(client *api.Client, theme string) *Model {
 
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
-		m.fetchFeed(tabHome),
-		m.fetchFeed(tabDiscover),
-		m.loadBookmarks(),
+		m.loadFeed(tabHome, ""),
+		m.loadFeed(tabDiscover, ""),
+		m.loadFeed(tabSaved, ""),
 	)
+}
+
+// list resolves a listID to the list it addresses.
+func (m *Model) list(id listID) *feedList {
+	switch id.kind {
+	case listProfile:
+		return &m.profileFeeds[id.idx]
+	case listSearch:
+		return &m.search
+	default:
+		return &m.feeds[id.idx]
+	}
+}
+
+// currentList returns the list the timeline view is scrolling: the search
+// results when a search is active, otherwise the active tab.
+func (m *Model) currentList() (*feedList, listID) {
+	if m.inSearch {
+		return &m.search, searchList
+	}
+	return &m.feeds[m.activeTab], timelineList(m.activeTab)
+}
+
+// loadMore fetches the next page of the given list.
+func (m *Model) loadMore(id listID, cursor string) tea.Cmd {
+	switch id.kind {
+	case listProfile:
+		return m.loadAuthorFeed(m.profileActor, profileTabType(id.idx), cursor)
+	case listSearch:
+		return m.loadSearch(m.searchQuery, cursor)
+	default:
+		return m.loadFeed(tab(id.idx), cursor)
+	}
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -205,34 +215,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.compose.SetWidth(m.width/2 - 8)
 		return m, nil
 
+	case listMsg:
+		l := m.list(msg.id)
+		if msg.more {
+			l.appendPage(msg.items, msg.cursor, msg.err)
+		} else {
+			l.set(msg.items, msg.cursor, msg.err)
+		}
+		if msg.id.kind == listSearch {
+			m.reportSearch(msg)
+		}
+		return m, nil
+
 	case imageFetchedMsg:
 		delete(m.imageLoading, msg.url)
 		if msg.err != nil {
 			m.imageError[msg.url] = msg.err.Error()
 		} else {
 			m.imageCache[msg.url] = msg.img
-		}
-		return m, nil
-
-	case fetchedMsg:
-		m.loading[msg.tab] = false
-		if msg.err != nil {
-			m.fetchErr[msg.tab] = msg.err.Error()
-		} else {
-			m.feeds[msg.tab] = msg.items
-			m.nextCursor[msg.tab] = msg.cursor
-			m.fetchErr[msg.tab] = ""
-		}
-		return m, nil
-
-	case appendedMsg:
-		m.loadingMore[msg.tab] = false
-		if msg.err != nil {
-			m.fetchErr[msg.tab] = msg.err.Error()
-		} else {
-			m.feeds[msg.tab] = append(m.feeds[msg.tab], msg.items...)
-			m.nextCursor[msg.tab] = msg.cursor
-			m.fetchErr[msg.tab] = ""
 		}
 		return m, nil
 
@@ -248,99 +248,74 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.postSuccess = true
 		m.statusMsg = "Post sent!"
 		return m, tea.Batch(
-			m.fetchFeed(tabHome),
-			m.fetchFeed(tabDiscover),
+			m.loadFeed(tabHome, ""),
+			m.loadFeed(tabDiscover, ""),
 		)
 
 	case likeMsg:
 		if msg.err != nil {
 			m.statusMsg = "Like failed: " + msg.err.Error()
-		} else if msg.liked {
+			return m, nil
+		}
+		post := &m.detailItem.Post
+		if msg.liked {
 			m.statusMsg = "Liked!"
-			m.detailItem.Post.LikeCount++
-			m.detailItem.Post.Viewer.Like = msg.likeURI
-			m.syncDetailItemToFeed()
+			post.LikeCount++
+			post.Viewer.Like = msg.likeURI
 		} else {
 			m.statusMsg = "Unliked!"
-			if m.detailItem.Post.LikeCount > 0 {
-				m.detailItem.Post.LikeCount--
-			}
-			m.detailItem.Post.Viewer.Like = ""
-			m.syncDetailItemToFeed()
+			post.LikeCount = decrement(post.LikeCount)
+			post.Viewer.Like = ""
 		}
+		m.syncDetailItemToFeed()
 		return m, nil
 
 	case repostMsg:
 		if msg.err != nil {
 			m.statusMsg = "Repost failed: " + msg.err.Error()
-		} else if msg.reposted {
+			return m, nil
+		}
+		post := &m.detailItem.Post
+		if msg.reposted {
 			m.statusMsg = "Reposted!"
-			m.detailItem.Post.RepostCount++
-			m.detailItem.Post.Viewer.Repost = msg.repostURI
-			m.syncDetailItemToFeed()
+			post.RepostCount++
+			post.Viewer.Repost = msg.repostURI
 		} else {
 			m.statusMsg = "Unreposted!"
-			if m.detailItem.Post.RepostCount > 0 {
-				m.detailItem.Post.RepostCount--
-			}
-			m.detailItem.Post.Viewer.Repost = ""
-			m.syncDetailItemToFeed()
+			post.RepostCount = decrement(post.RepostCount)
+			post.Viewer.Repost = ""
 		}
+		m.syncDetailItemToFeed()
 		return m, nil
 
 	case bookmarkMsg:
 		if msg.err != nil {
 			m.statusMsg = "Bookmark failed: " + msg.err.Error()
-		} else if msg.bookmarked {
+			return m, nil
+		}
+		if msg.bookmarked {
 			m.statusMsg = "Bookmarked!"
-			return m, m.loadBookmarks()
 		} else {
 			m.statusMsg = "Unbookmarked!"
-			return m, m.loadBookmarks()
 		}
-		return m, nil
-
-	case searchMsg:
-		m.searchLoading = false
-		if msg.err != nil {
-			m.statusMsg = "Search failed: " + msg.err.Error()
-			m.inSearch = false
-		} else {
-			filtered := filterSearchResults(msg.items, m.searchQuery)
-			m.searchResults = filtered
-			m.searchNextCursor = msg.cursor
-			m.searchCursor = 0
-			m.inSearch = true
-			m.statusMsg = fmt.Sprintf("Search: %q (%d results)", m.searchQuery, len(filtered))
-		}
-		return m, nil
-
-	case appendSearchMsg:
-		m.searchLoadingMore = false
-		if msg.err == nil {
-			filtered := filterSearchResults(msg.items, m.searchQuery)
-			m.searchResults = append(m.searchResults, filtered...)
-			m.searchNextCursor = msg.cursor
-			m.statusMsg = fmt.Sprintf("Search: %q (%d results)", m.searchQuery, len(m.searchResults))
-		}
-		return m, nil
+		return m, m.loadFeed(tabSaved, "")
 
 	case followMsg:
 		if msg.err != nil {
 			m.statusMsg = "Follow failed: " + msg.err.Error()
-		} else if msg.followed {
+			return m, nil
+		}
+		if msg.followed {
 			m.statusMsg = "Followed!"
-			if m.profileData != nil {
-				m.profileData.Viewer.Following = msg.followURI
-				m.profileData.FollowersCount++
-			}
 		} else {
 			m.statusMsg = "Unfollowed!"
-			if m.profileData != nil {
-				m.profileData.Viewer.Following = ""
-				if m.profileData.FollowersCount > 0 {
-					m.profileData.FollowersCount--
-				}
+		}
+		if m.profileData != nil {
+			m.profileData.Viewer.Following = msg.followURI
+			if msg.followed {
+				m.profileData.FollowersCount++
+			} else {
+				m.profileData.FollowersCount = decrement(m.profileData.FollowersCount)
 			}
 		}
 		return m, nil
@@ -349,22 +324,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.profileLoading = false
 		if msg.err == nil {
 			m.profileData = msg.profile
-		}
-		return m, nil
-
-	case fetchedAuthorFeedMsg:
-		m.profileFeedLoading[msg.tabType] = false
-		if msg.err == nil {
-			m.profileFeeds[msg.tabType] = msg.items
-			m.profileNextCursors[msg.tabType] = msg.cursor
-		}
-		return m, nil
-
-	case appendedAuthorFeedMsg:
-		m.profileFeedLoadingMore[msg.tabType] = false
-		if msg.err == nil {
-			m.profileFeeds[msg.tabType] = append(m.profileFeeds[msg.tabType], msg.items...)
-			m.profileNextCursors[msg.tabType] = msg.cursor
 		}
 		return m, nil
 	}
@@ -383,258 +342,167 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func decrement(n int) int {
+	if n > 0 {
+		return n - 1
+	}
+	return 0
+}
+
+// reportSearch turns the outcome of a search into a status message and, on the
+// first page, switches the timeline over to the results.
+func (m *Model) reportSearch(msg listMsg) {
+	if msg.err != nil {
+		if !msg.more {
+			m.inSearch = false
+			m.statusMsg = "Search failed: " + msg.err.Error()
+		}
+		return
+	}
+	if !msg.more {
+		m.search.top()
+		m.inSearch = true
+	}
+	m.statusMsg = fmt.Sprintf("Search: %q (%d results)", m.searchQuery, len(m.search.items))
+}
+
+func (m *Model) exitSearch() {
+	m.search = feedList{}
+	m.searchQuery = ""
+	m.inSearch = false
+	m.statusMsg = ""
+}
+
+func (m *Model) startCompose(replyTo *api.Post, from state) {
+	m.statusMsg = ""
+	m.replyTo = replyTo
+	m.prevState = from
+	m.state = stateCompose
+	m.composeErr = ""
+	m.compose.Reset()
+	m.compose.Focus()
+}
+
 func (m *Model) updateTimeline(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		m.postSuccess = false
-		switch msg.String() {
-		case "q":
-			if m.inSearch {
-				m.inSearch = false
-				m.searchResults = nil
-				m.searchCursor = 0
-				m.searchQuery = ""
-				m.searchNextCursor = ""
-				m.searchLoadingMore = false
-				m.statusMsg = ""
-			} else {
-				return m, tea.Quit
-			}
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	m.postSuccess = false
+	list, id := m.currentList()
 
-		case "ctrl+c":
+	switch key.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+
+	case "q":
+		if !m.inSearch {
 			return m, tea.Quit
+		}
+		m.exitSearch()
 
-		case "esc":
-			if m.inSearch {
-				m.inSearch = false
-				m.searchResults = nil
-				m.searchCursor = 0
-				m.searchQuery = ""
-				m.searchNextCursor = ""
-				m.searchLoadingMore = false
-				m.statusMsg = ""
-			}
+	case "esc":
+		if m.inSearch {
+			m.exitSearch()
+		}
 
-		case "j":
+	case "j":
+		m.statusMsg = ""
+		if list.down() {
+			return m, m.loadMore(id, list.nextCursor)
+		}
+
+	case "k":
+		m.statusMsg = ""
+		list.up()
+
+	case "g":
+		m.statusMsg = ""
+		list.top()
+
+	case "G":
+		m.statusMsg = ""
+		list.bottom()
+
+	case "h":
+		if !m.inSearch && m.activeTab > 0 {
 			m.statusMsg = ""
-			if m.inSearch {
-				if m.searchCursor < len(m.searchResults)-1 {
-					m.searchCursor++
-				} else if !m.searchLoadingMore && m.searchNextCursor != "" {
-					m.searchLoadingMore = true
-					return m, m.loadMoreSearch(m.searchQuery, m.searchNextCursor)
-				}
-			} else {
-				feed := m.feeds[m.activeTab]
-				if m.cursor[m.activeTab] < len(feed)-1 {
-					m.cursor[m.activeTab]++
-				} else if !m.loadingMore[m.activeTab] && m.nextCursor[m.activeTab] != "" && m.activeTab != tabSaved {
-					m.loadingMore[m.activeTab] = true
-					return m, m.loadMoreFeed(m.activeTab, m.nextCursor[m.activeTab])
-				}
-			}
+			m.activeTab--
+		}
 
-		case "k":
+	case "l":
+		if !m.inSearch && m.activeTab < tabCount-1 {
 			m.statusMsg = ""
-			if m.inSearch {
-				if m.searchCursor > 0 {
-					m.searchCursor--
-				}
-			} else {
-				if m.cursor[m.activeTab] > 0 {
-					m.cursor[m.activeTab]--
-				}
-			}
+			m.activeTab++
+		}
 
-		case "h":
-			if !m.inSearch {
-				m.statusMsg = ""
-				if m.activeTab > 0 {
-					m.activeTab--
-				}
-			}
+	case "enter":
+		m.statusMsg = ""
+		if item, ok := list.selected(); ok {
+			m.detailItem = item
+			m.state = stateDetail
+			return m, m.fetchDetailImageCmd()
+		}
 
-		case "l":
-			if !m.inSearch {
-				m.statusMsg = ""
-				if m.activeTab < tabCount-1 {
-					m.activeTab++
-				}
-			}
+	case "u":
+		m.statusMsg = ""
+		if item, ok := list.selected(); ok {
+			return m.openUserProfile(item.Post.Author, stateTimeline)
+		}
 
-		case "enter":
+	case "c":
+		m.startCompose(nil, stateTimeline)
+
+	case "s":
+		m.state = stateSearch
+		m.searchInput.SetValue("")
+		m.searchInput.Focus()
+
+	case "r":
+		if !m.inSearch {
 			m.statusMsg = ""
-			if m.inSearch {
-				if len(m.searchResults) > 0 {
-					m.detailItem = m.searchResults[m.searchCursor]
-					m.state = stateDetail
-					return m, m.fetchDetailImageCmd()
-				}
-			} else {
-				feed := m.feeds[m.activeTab]
-				if len(feed) > 0 {
-					m.detailItem = feed[m.cursor[m.activeTab]]
-					m.state = stateDetail
-					return m, m.fetchDetailImageCmd()
-				}
-			}
-
-		case "c":
-			m.statusMsg = ""
-			m.prevState = stateTimeline
-			m.state = stateCompose
-			m.replyTo = nil
-			m.composeErr = ""
-			m.compose.Reset()
-			m.compose.Focus()
-
-		case "s":
-			m.state = stateSearch
-			m.searchInput.SetValue("")
-			m.searchInput.Focus()
-
-		case "r":
-			if !m.inSearch {
-				m.statusMsg = ""
-				m.loading[m.activeTab] = true
-				m.cursor[m.activeTab] = 0
-				if m.activeTab == tabSaved {
-					return m, m.loadBookmarks()
-				}
-				return m, m.fetchFeed(m.activeTab)
-			}
-
-		case "g":
-			m.statusMsg = ""
-			if m.inSearch {
-				m.searchCursor = 0
-			} else {
-				m.cursor[m.activeTab] = 0
-			}
-
-		case "G":
-			m.statusMsg = ""
-			if m.inSearch {
-				if len(m.searchResults) > 0 {
-					m.searchCursor = len(m.searchResults) - 1
-				}
-			} else {
-				feed := m.feeds[m.activeTab]
-				if len(feed) > 0 {
-					m.cursor[m.activeTab] = len(feed) - 1
-				}
-			}
-
-		case "u":
-			m.statusMsg = ""
-			var author api.Author
-			if m.inSearch {
-				if len(m.searchResults) > 0 {
-					author = m.searchResults[m.searchCursor].Post.Author
-				}
-			} else {
-				feed := m.feeds[m.activeTab]
-				if len(feed) > 0 {
-					author = feed[m.cursor[m.activeTab]].Post.Author
-				}
-			}
-			if author.DID != "" {
-				return m.openUserProfile(author, stateTimeline)
-			}
+			list.loading = true
+			list.top()
+			return m, m.loadFeed(m.activeTab, "")
 		}
 	}
 	return m, nil
 }
 
-func (m *Model) openUserProfile(author api.Author, prevState state) (tea.Model, tea.Cmd) {
-	m.profileActor = author.Handle
-	m.profileData = nil
-	m.profileFeeds = [profileTabCount][]api.FeedItem{}
-	m.profileCursors = [profileTabCount]int{}
-	m.profileNextCursors = [profileTabCount]string{}
-	m.profileFeedLoadingMore = [profileTabCount]bool{}
-	m.profileActiveTab = profileTabPosts
-	m.profileLoading = true
-	m.profileFeedLoading = [profileTabCount]bool{true, true}
-	m.profilePrevState = prevState
-	m.state = stateUserProfile
-	return m, tea.Batch(
-		m.fetchProfile(author.Handle),
-		m.fetchAuthorFeed(author.Handle, profileTabPosts),
-		m.fetchAuthorFeed(author.Handle, profileTabReplies),
-	)
-}
-
-func (m *Model) syncDetailItemToFeed() {
-	for t := tab(0); t < tabCount; t++ {
-		for i, item := range m.feeds[t] {
-			if item.Post.URI == m.detailItem.Post.URI {
-				m.feeds[t][i] = m.detailItem
-			}
-		}
-	}
-}
-
-func (m *Model) isBookmarked(uri string) bool {
-	for _, item := range m.feeds[tabSaved] {
-		if item.Post.URI == uri {
-			return true
-		}
-	}
-	return false
-}
-
 func (m *Model) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc", "q", "enter":
-			m.state = stateTimeline
-			m.statusMsg = ""
-			return m, tea.ClearScreen
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	post := m.detailItem.Post
 
-		case "l":
-			post := m.detailItem.Post
-			if post.Viewer.Like != "" {
-				return m, m.unlikePost(post.Viewer.Like)
-			}
-			return m, m.likePost(post.URI, post.CID)
+	switch key.String() {
+	case "esc", "q", "enter":
+		m.state = stateTimeline
+		m.statusMsg = ""
+		return m, tea.ClearScreen
 
-		case "r":
-			post := m.detailItem.Post
-			if post.Viewer.Repost != "" {
-				return m, m.unrepostPost(post.Viewer.Repost)
-			}
-			return m, m.repostPost(post.URI, post.CID)
+	case "l":
+		return m, m.toggleLike(post)
 
-		case "b":
-			post := m.detailItem.Post
-			if m.isBookmarked(post.URI) {
-				return m, m.unbookmarkPost(post.URI)
-			}
-			return m, m.bookmarkPost(m.detailItem)
+	case "r":
+		return m, m.toggleRepost(post)
 
-		case "c":
-			p := m.detailItem.Post
-			m.replyTo = &p
-			m.prevState = stateDetail
-			m.state = stateCompose
-			m.composeErr = ""
-			m.compose.Reset()
-			m.compose.Focus()
+	case "b":
+		return m, m.toggleBookmark(post)
 
-		case "u":
-			return m.openUserProfile(m.detailItem.Post.Author, stateDetail)
-		}
+	case "c":
+		m.startCompose(&post, stateDetail)
+
+	case "u":
+		return m.openUserProfile(post.Author, stateDetail)
 	}
 	return m, nil
 }
 
 func (m *Model) updateCompose(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
 		case "esc":
 			m.state = m.prevState
 			m.replyTo = nil
@@ -642,74 +510,70 @@ func (m *Model) updateCompose(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "ctrl+s":
 			text := strings.TrimSpace(m.compose.Value())
-			if text == "" {
+			switch {
+			case text == "":
 				m.composeErr = "Post cannot be empty"
 				return m, nil
-			}
-			if len([]rune(text)) > 300 {
+			case len([]rune(text)) > 300:
 				m.composeErr = "Post exceeds 300 characters"
 				return m, nil
 			}
 			return m, m.sendPost(text, m.replyTo)
 		}
 	}
+	var cmd tea.Cmd
 	m.compose, cmd = m.compose.Update(msg)
 	return m, cmd
 }
 
 func (m *Model) updateUserProfile(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "esc":
-			m.state = m.profilePrevState
-			m.statusMsg = ""
-		case "f":
-			if m.profileData == nil {
-				return m, nil
-			}
-			if m.profileData.Viewer.Following != "" {
-				return m, m.unfollowUser(m.profileData.Viewer.Following)
-			}
-			return m, m.followUser(m.profileData.DID)
-		case "h":
-			if m.profileActiveTab > 0 {
-				m.profileActiveTab--
-			}
-		case "l":
-			if m.profileActiveTab < profileTabCount-1 {
-				m.profileActiveTab++
-			}
-		case "j":
-			t := m.profileActiveTab
-			feed := m.profileFeeds[t]
-			if m.profileCursors[t] < len(feed)-1 {
-				m.profileCursors[t]++
-			} else if !m.profileFeedLoadingMore[t] && m.profileNextCursors[t] != "" {
-				m.profileFeedLoadingMore[t] = true
-				return m, m.loadMoreAuthorFeed(m.profileActor, t, m.profileNextCursors[t])
-			}
-		case "k":
-			if m.profileCursors[m.profileActiveTab] > 0 {
-				m.profileCursors[m.profileActiveTab]--
-			}
-		case "g":
-			m.profileCursors[m.profileActiveTab] = 0
-		case "G":
-			feed := m.profileFeeds[m.profileActiveTab]
-			if len(feed) > 0 {
-				m.profileCursors[m.profileActiveTab] = len(feed) - 1
-			}
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	list := &m.profileFeeds[m.profileActiveTab]
+
+	switch key.String() {
+	case "q", "esc":
+		m.state = m.profilePrevState
+		m.statusMsg = ""
+
+	case "f":
+		if m.profileData == nil {
+			return m, nil
 		}
+		return m, m.toggleFollow(m.profileData)
+
+	case "h":
+		if m.profileActiveTab > 0 {
+			m.profileActiveTab--
+		}
+
+	case "l":
+		if m.profileActiveTab < profileTabCount-1 {
+			m.profileActiveTab++
+		}
+
+	case "j":
+		if list.down() {
+			return m, m.loadMore(profileList(m.profileActiveTab), list.nextCursor)
+		}
+
+	case "k":
+		list.up()
+
+	case "g":
+		list.top()
+
+	case "G":
+		list.bottom()
 	}
 	return m, nil
 }
 
 func (m *Model) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
 		case "esc":
 			m.state = stateTimeline
 			return m, nil
@@ -719,12 +583,50 @@ func (m *Model) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.searchQuery = query
-			m.searchLoading = true
+			m.search.loading = true
 			m.inSearch = false
 			m.state = stateTimeline
-			return m, m.searchPosts(query)
+			return m, m.loadSearch(query, "")
 		}
 	}
+	var cmd tea.Cmd
 	m.searchInput, cmd = m.searchInput.Update(msg)
 	return m, cmd
+}
+
+func (m *Model) openUserProfile(author api.Author, prevState state) (tea.Model, tea.Cmd) {
+	m.profileActor = author.Handle
+	m.profileData = nil
+	m.profileLoading = true
+	m.profileActiveTab = profileTabPosts
+	m.profileFeeds = [profileTabCount]feedList{{loading: true}, {loading: true}}
+	m.profilePrevState = prevState
+	m.state = stateUserProfile
+
+	return m, tea.Batch(
+		m.fetchProfile(author.Handle),
+		m.loadAuthorFeed(author.Handle, profileTabPosts, ""),
+		m.loadAuthorFeed(author.Handle, profileTabReplies, ""),
+	)
+}
+
+// syncDetailItemToFeed writes the like/repost state edited in the detail view
+// back into every list that shows the same post.
+func (m *Model) syncDetailItemToFeed() {
+	for t := range m.feeds {
+		for i, item := range m.feeds[t].items {
+			if item.Post.URI == m.detailItem.Post.URI {
+				m.feeds[t].items[i] = m.detailItem
+			}
+		}
+	}
+}
+
+func (m *Model) isBookmarked(uri string) bool {
+	for _, item := range m.feeds[tabSaved].items {
+		if item.Post.URI == uri {
+			return true
+		}
+	}
+	return false
 }

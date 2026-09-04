@@ -52,7 +52,7 @@ func (m *Model) View() string {
 
 func (m *Model) renderTabs() string {
 	var line string
-	if m.searchLoading || m.inSearch {
+	if m.search.loading || m.inSearch {
 		line = activeTabStyle.Render("Search Result")
 	} else {
 		tabs := []string{"Home", "Discover", "Saved"}
@@ -186,7 +186,8 @@ func (m *Model) renderFeedItem(item api.FeedItem, selected bool, width int) stri
 
 // fillFeedToHeight renders feed items around cur, expanding to fill height lines.
 // Posts that don't fully fit are truncated so the terminal is always filled.
-func (m *Model) fillFeedToHeight(feed []api.FeedItem, cur, height int) []string {
+func (m *Model) fillFeedToHeight(l *feedList, height int) []string {
+	feed, cur := l.items, l.cursor
 	if len(feed) == 0 {
 		return nil
 	}
@@ -246,65 +247,34 @@ func (m *Model) fillFeedToHeight(feed []api.FeedItem, cur, height int) []string 
 	return lines
 }
 
-func (m *Model) renderSearchResults(height int) string {
-	if m.searchLoading {
-		return lipgloss.NewStyle().
-			Padding(1, 2).
-			Foreground(colorMuted).
-			Render("Searching...")
+// renderList renders one feed list into exactly height rows, including its
+// loading, error and empty states.
+func (m *Model) renderList(l *feedList, height int, loadingMsg, emptyMsg string) string {
+	notice := func(text string) string {
+		return lipgloss.NewStyle().Padding(1, 2).Foreground(colorMuted).Render(text)
 	}
 
-	feed := m.searchResults
-	if len(feed) == 0 {
-		return lipgloss.NewStyle().
-			Padding(1, 2).
-			Foreground(colorMuted).
-			Render("No results found.")
+	switch {
+	case l.loading:
+		return notice(loadingMsg)
+	case l.err != "":
+		return errorStyle.Padding(1, 2).Render("Error: " + l.err)
+	case len(l.items) == 0:
+		return notice(emptyMsg)
 	}
 
-	lines := m.fillFeedToHeight(feed, m.searchCursor, height)
-	result := strings.Join(lines, "\n")
-	if m.searchLoadingMore {
+	result := strings.Join(m.fillFeedToHeight(l, height), "\n")
+	if l.loadingMore {
 		result += "\n" + lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("Loading more...")
 	}
 	return result
 }
 
 func (m *Model) renderTimeline(height int) string {
-	if m.searchLoading || m.inSearch {
-		return m.renderSearchResults(height)
+	if m.search.loading || m.inSearch {
+		return m.renderList(&m.search, height, "Searching...", "No results found.")
 	}
-
-	t := m.activeTab
-	if m.loading[t] {
-		return lipgloss.NewStyle().
-			Padding(1, 2).
-			Foreground(colorMuted).
-			Render("Loading...")
-	}
-	if m.fetchErr[t] != "" {
-		return errorStyle.Padding(1, 2).Render("Error: " + m.fetchErr[t])
-	}
-
-	feed := m.feeds[t]
-	if len(feed) == 0 {
-		return lipgloss.NewStyle().
-			Padding(1, 2).
-			Foreground(colorMuted).
-			Render("No posts yet.")
-	}
-
-	cur := m.cursor[t]
-	lines := m.fillFeedToHeight(feed, cur, height)
-	result := strings.Join(lines, "\n")
-	if m.loadingMore[t] {
-		loadingLine := lipgloss.NewStyle().
-			Foreground(colorMuted).
-			Padding(0, 2).
-			Render("Loading more...")
-		result += "\n" + loadingLine
-	}
-	return result
+	return m.renderList(&m.feeds[m.activeTab], height, "Loading...", "No posts yet.")
 }
 
 func (m *Model) renderDetailFull() string {
@@ -581,37 +551,32 @@ func (m *Model) renderUserProfile(base string) string {
 }
 
 func (m *Model) renderProfilePosts(width, height int) string {
-	if m.profileFeedLoading[m.profileActiveTab] {
+	l := &m.profileFeeds[m.profileActiveTab]
+	switch {
+	case l.loading:
 		return lipgloss.NewStyle().Foreground(colorMuted).Render("Loading posts...")
-	}
-
-	feed := m.profileFeeds[m.profileActiveTab]
-	if len(feed) == 0 {
+	case len(l.items) == 0:
 		return lipgloss.NewStyle().Foreground(colorMuted).Render("No posts.")
 	}
 
-	cur := m.profileCursors[m.profileActiveTab]
-	linesPerPost := 4 // author + text + stats + border spacing
+	const linesPerPost = 4 // author + text + meta + spacing
 	visiblePosts := height / linesPerPost
 	if visiblePosts < 1 {
 		visiblePosts = 1
 	}
 
 	start := 0
-	if cur >= visiblePosts {
-		start = cur - visiblePosts/2
+	if l.cursor >= visiblePosts {
+		start = l.cursor - visiblePosts/2
 	}
-	end := start + visiblePosts + 1
-	if end > len(feed) {
-		end = len(feed)
-	}
+	end := min(start+visiblePosts+1, len(l.items))
 
 	var lines []string
 	for i := start; i < end; i++ {
-		lines = append(lines, m.renderFeedItem(feed[i], i == cur, width-4))
+		lines = append(lines, m.renderFeedItem(l.items[i], i == l.cursor, width-4))
 	}
 	result := strings.Join(lines, "\n")
-	if m.profileFeedLoadingMore[m.profileActiveTab] {
+	if l.loadingMore {
 		result += "\n" + lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 2).Render("Loading more...")
 	}
 	return result
