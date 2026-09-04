@@ -14,14 +14,44 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Copilot reviews with comments only — it cannot approve a pull request,
-      # so this never gates the merge. The step is best-effort: it fails when
-      # Copilot code review is unavailable for the account, which must not
+      # so this never gates the merge. The step is best-effort: it is marked
+      # continue-on-error so an account without Copilot code review does not
       # block the pull request.
       - name: Request a review from Copilot
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NODE_ID: ${{ github.event.pull_request.node_id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh api --method POST \
-            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/requested_reviewers" \
-            -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
+          set -euo pipefail
+
+          # The REST reviewer endpoint only understands users and teams: it
+          # answers 200 for a bot and adds nobody. Requesting a bot review takes
+          # the GraphQL mutation instead.
+          bot_id=$(gh api "users/copilot-pull-request-reviewer%5Bbot%5D" --jq .node_id)
+          gh api graphql -f pr="$PR_NODE_ID" -f bot="$bot_id" -f query='
+            mutation($pr: ID!, $bot: ID!) {
+              requestReviews(input: {pullRequestId: $pr, botIds: [$bot], union: true}) {
+                clientMutationId
+              }
+            }'
+
+          # Confirm the request landed, so an unavailable Copilot shows up as a
+          # warning instead of a green step that did nothing.
+          reviewers=$(gh api graphql -F owner="${{ github.repository_owner }}" -F name="${{ github.event.repository.name }}" -F number="$PR_NUMBER" -f query='
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $number) {
+                  reviewRequests(first: 20) {
+                    nodes { requestedReviewer { __typename ... on Bot { login } } }
+                  }
+                }
+              }
+            }' --jq '.data.repository.pullRequest.reviewRequests.nodes[].requestedReviewer.login')
+
+          if ! grep -q copilot <<<"$reviewers"; then
+            echo "::warning::Copilot did not accept the review request. Check that Copilot code review is enabled for this account."
+            exit 1
+          fi
+          echo "Copilot review requested."
