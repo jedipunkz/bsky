@@ -63,16 +63,15 @@ func imageDims(src image.Image, maxCols, maxRows int) (cols, rows int) {
 	return cols, rows
 }
 
-// supportsSixel reports whether the current terminal supports the Sixel graphics protocol.
+// supportsSixel reports whether Sixel output is enabled.
+//
+// Sixel is opt-in: guessing from TERM_PROGRAM/TERM is unreliable because those
+// variables survive terminal multiplexers (tmux, zellij, herdr, ...) that do not
+// forward Sixel DCS sequences, in which case the image is silently swallowed and
+// nothing is drawn at all. The half-block renderer is plain text plus 24-bit
+// colour, so it works everywhere; set BSKY_SIXEL=1 to opt into Sixel.
 func supportsSixel() bool {
-	if os.Getenv("BSKY_SIXEL") == "1" {
-		return true
-	}
-	switch os.Getenv("TERM_PROGRAM") {
-	case "WezTerm", "iTerm.app":
-		return true
-	}
-	return strings.Contains(os.Getenv("TERM"), "sixel")
+	return os.Getenv("BSKY_SIXEL") == "1"
 }
 
 // renderImageForView renders src into a string suitable for embedding in BubbleTea's View().
@@ -83,13 +82,13 @@ func supportsSixel() bool {
 //
 // Sixel strategy (when supported):
 //
-//	  The string is built as:
-//	    "\n" × (availableRows-1)          ← placeholder: BubbleTea counts these lines
-//	    "\033[<availableRows-1>A"          ← cursor-up: return to the start of the image area
-//	    <Sixel DCS>                        ← pixels rendered; cursor ends at bottom of image ✓
+//	The string is built as:
+//	  "\n" × (availableRows-1)          ← placeholder: BubbleTea counts these lines
+//	  "\033[<availableRows-1>A"          ← cursor-up: return to the start of the image area
+//	  <Sixel DCS>                        ← pixels rendered; cursor ends at bottom of image ✓
 //
-//	  BubbleTea renders the empty placeholder lines first, then the Sixel line overwrites
-//	  them.  On subsequent diff-renders, unchanged lines are skipped, so the Sixel persists.
+//	BubbleTea renders the empty placeholder lines first, then the Sixel line overwrites
+//	them.  On subsequent diff-renders, unchanged lines are skipped, so the Sixel persists.
 //
 // Block-char fallback:
 //

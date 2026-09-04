@@ -75,6 +75,21 @@ theme: kanagawa
 
 If `theme` is not set or is an unrecognized value, `tokyonight` is used.
 
+### Images
+
+Images in the detail view are drawn with half-block characters (`▀`), which work
+in any terminal with 24-bit colour support.
+
+If your terminal supports the Sixel graphics protocol, set `BSKY_SIXEL=1` for
+pixel-accurate images:
+
+```sh
+BSKY_SIXEL=1 bsky
+```
+
+Sixel is opt-in because terminal multiplexers (tmux, zellij, ...) usually drop
+Sixel sequences, which would leave the image area blank.
+
 ## Requirements
 
 - Go 1.24+
