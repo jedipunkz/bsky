@@ -1,0 +1,27 @@
+name: Copilot Review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  request-review:
+    name: Request Copilot review
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      # Copilot reviews with comments only — it cannot approve a pull request,
+      # so this never gates the merge. The step is best-effort: it fails when
+      # Copilot code review is unavailable for the account, which must not
+      # block the pull request.
+      - name: Request a review from Copilot
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --method POST \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/requested_reviewers" \
+            -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
