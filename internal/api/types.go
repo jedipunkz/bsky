@@ -15,6 +15,36 @@ type PostRecord struct {
 	Text      string    `json:"text"`
 	CreatedAt string    `json:"createdAt"`
 	Reply     *ReplyRef `json:"reply,omitempty"`
+	Facets    []Facet   `json:"facets,omitempty"`
+}
+
+// FacetFeature is one annotation on a text range. Only the link feature is
+// used here; mentions and tags carry other fields.
+type FacetFeature struct {
+	Type string `json:"$type"`
+	URI  string `json:"uri"`
+}
+
+// FacetIndex is a UTF-8 *byte* range into PostRecord.Text, not a rune range.
+type FacetIndex struct {
+	ByteStart int `json:"byteStart"`
+	ByteEnd   int `json:"byteEnd"`
+}
+
+type Facet struct {
+	Index    FacetIndex     `json:"index"`
+	Features []FacetFeature `json:"features"`
+}
+
+// LinkURI returns the target of the facet's link feature, or "" when the facet
+// annotates something else (a mention or a tag).
+func (f Facet) LinkURI() string {
+	for _, feat := range f.Features {
+		if feat.Type == "app.bsky.richtext.facet#link" && feat.URI != "" {
+			return feat.URI
+		}
+	}
+	return ""
 }
 
 type ProfileViewer struct {

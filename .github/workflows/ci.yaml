@@ -54,7 +54,9 @@ jobs:
   # Dependabot pull requests merge themselves once the jobs above are green.
   # The gate is this job's `needs`, not branch protection: the repository has no
   # required status checks, so enabling auto-merge any earlier would merge the
-  # pull request before the checks had run.
+  # pull request before the checks had run. Approval is not part of this job:
+  # GITHUB_TOKEN is not permitted to approve pull requests, and no review is
+  # required to merge.
   auto-merge:
     name: Auto-merge Dependabot PR
     needs: [lint, build, test]
@@ -64,10 +66,8 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Approve and enable auto-merge
+      - name: Enable auto-merge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-        run: |
-          gh pr review --approve "$PR_URL"
-          gh pr merge --auto --squash "$PR_URL"
+        run: gh pr merge --auto --squash "$PR_URL"
