@@ -175,7 +175,7 @@ func (m *Model) renderFeedItem(item api.FeedItem, selected bool, width int) stri
 	post := item.Post
 	parts := []string{
 		renderPostHeader(post, inner, nameSt, handleSt),
-		renderTextWithURLsStyled(post.Record.Text, inner, textSt),
+		renderTextWithLinks(post.Record, inner, textSt),
 	}
 	if meta := m.renderPostMeta(post); meta != "" {
 		parts = append(parts, meta)
@@ -281,7 +281,7 @@ func (m *Model) renderDetailFull() string {
 	post := m.detailItem.Post
 
 	header := renderPostHeader(post, m.width-6, selectedAuthorStyle, selectedHandleStyle)
-	body := renderTextWithURLsStyled(post.Record.Text, m.width-6, selectedTextStyle)
+	body := renderTextWithLinks(post.Record, m.width-6, selectedTextStyle)
 
 	// Stats and help are rendered outside the postBox so the image can sit between them.
 	stats := lipgloss.NewStyle().Padding(0, 1).Render(m.renderPostMeta(post))
@@ -582,32 +582,125 @@ func (m *Model) renderProfilePosts(width, height int) string {
 	return result
 }
 
-// renderTextWithURLsStyled wraps text and renders URLs as OSC 8 terminal
-// hyperlinks (underlined, primary color). Shift+click opens the URL in the browser.
-func renderTextWithURLsStyled(text string, width int, ts lipgloss.Style) string {
-	wrapped := wrapText(text, width)
-	matches := urlRegex.FindAllStringIndex(wrapped, -1)
-	if len(matches) == 0 {
+// linkSpan is a clickable range of the *unwrapped* post text, given as UTF-8
+// byte offsets, together with the URL it points at. The visible text and the
+// URL differ whenever Bluesky shortens a long link for display.
+type linkSpan struct {
+	start, end int
+	uri        string
+}
+
+// postLinks returns the clickable ranges of a post's text. Richtext facets are
+// authoritative — they carry the full URL even when the text shows a shortened
+// form — so bare URLs are only scanned for when a post has no link facets,
+// which is the case for posts written by clients that do not send them.
+func postLinks(rec api.PostRecord) []linkSpan {
+	var spans []linkSpan
+	for _, f := range rec.Facets {
+		uri := f.LinkURI()
+		// Offsets come from the server, so clamp them to the text we actually
+		// have rather than trusting them to be in range.
+		if uri == "" || f.Index.ByteStart < 0 || f.Index.ByteEnd > len(rec.Text) || f.Index.ByteStart >= f.Index.ByteEnd {
+			continue
+		}
+		spans = append(spans, linkSpan{start: f.Index.ByteStart, end: f.Index.ByteEnd, uri: uri})
+	}
+	if len(spans) > 0 {
+		return spans
+	}
+	for _, m := range urlRegex.FindAllStringIndex(rec.Text, -1) {
+		spans = append(spans, linkSpan{start: m[0], end: m[1], uri: rec.Text[m[0]:m[1]]})
+	}
+	return spans
+}
+
+// uriAt returns the URL covering byte i of the unwrapped text, or "".
+func uriAt(spans []linkSpan, i int) string {
+	if i < 0 {
+		return ""
+	}
+	for _, s := range spans {
+		if i >= s.start && i < s.end {
+			return s.uri
+		}
+	}
+	return ""
+}
+
+// mapWrapped maps each byte of wrapped back to the byte of orig it came from,
+// or -1 for a line break that wrapping introduced. ansi.Wrap only inserts
+// newlines and collapses the spaces it breaks on, so walking both strings
+// forward keeps them aligned. ok is false if they ever fall out of step, in
+// which case the caller must not rely on the mapping.
+func mapWrapped(orig, wrapped string) (idx []int, ok bool) {
+	idx = make([]int, len(wrapped))
+	o := 0
+	for w := 0; w < len(wrapped); w++ {
+		if o < len(orig) && wrapped[w] == orig[o] {
+			idx[w] = o
+			o++
+			continue
+		}
+		if wrapped[w] != '\n' {
+			return nil, false
+		}
+		// A break inserted mid-word maps to nothing; a break made at spaces
+		// consumes the whole run of spaces it replaced.
+		for o < len(orig) && orig[o] == ' ' {
+			o++
+		}
+		idx[w] = -1
+	}
+	return idx, true
+}
+
+// renderTextWithLinks wraps text to width and emits its links as OSC 8
+// terminal hyperlinks (underlined, primary color), so they can be clicked in
+// terminals that support them. A link split across lines stays one hyperlink
+// pointing at the full URL: the escape is re-opened on each line, because the
+// sequence must not straddle a newline.
+func renderTextWithLinks(rec api.PostRecord, width int, ts lipgloss.Style) string {
+	wrapped := wrapText(rec.Text, width)
+	spans := postLinks(rec)
+	if len(spans) == 0 {
+		return renderLines(ts, wrapped)
+	}
+	idx, ok := mapWrapped(rec.Text, wrapped)
+	if !ok {
 		return renderLines(ts, wrapped)
 	}
 
-	var b strings.Builder
-	last := 0
-	for _, m := range matches {
-		start, end := m[0], m[1]
-		if start > last {
-			b.WriteString(renderLines(ts, wrapped[last:start]))
+	var out, seg strings.Builder
+	segURI := ""
+	flush := func() {
+		if seg.Len() == 0 {
+			return
 		}
-		rawURL := wrapped[start:end]
-		styled := linkStyle.Render(rawURL)
-		// OSC 8 hyperlink: \033]8;;URL\a + visible text + \033]8;;\a
-		b.WriteString("\033]8;;" + rawURL + "\a" + styled + "\033]8;;\a")
-		last = end
+		text := seg.String()
+		seg.Reset()
+		if segURI == "" {
+			out.WriteString(ts.Render(text))
+			return
+		}
+		// OSC 8 hyperlink: ESC ] 8 ;; URL BEL + visible text + ESC ] 8 ;; BEL
+		out.WriteString("\033]8;;" + segURI + "\a" + linkStyle.Render(text) + "\033]8;;\a")
 	}
-	if last < len(wrapped) {
-		b.WriteString(renderLines(ts, wrapped[last:]))
+
+	for i := 0; i < len(wrapped); i++ {
+		if wrapped[i] == '\n' {
+			flush()
+			segURI = ""
+			out.WriteByte('\n')
+			continue
+		}
+		if uri := uriAt(spans, idx[i]); uri != segURI {
+			flush()
+			segURI = uri
+		}
+		seg.WriteByte(wrapped[i])
 	}
-	return b.String()
+	flush()
+	return out.String()
 }
 
 // renderLines styles each line individually. Rendering a multi-line string in
