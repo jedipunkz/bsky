@@ -266,6 +266,22 @@ func deleteKittyImage(id uint32) string {
 	return fmt.Sprintf("\033_Ga=d,d=I,i=%d,q=2\033\\", id)
 }
 
+// thumbMark is an invisible tag identifying which image a row belongs to.
+//
+// BubbleTea only rewrites the lines that changed since the last frame. The rows
+// a picture covers hold nothing but spaces, so two different scroll positions
+// would render them as the same string, those rows would never be repainted,
+// and the pixels already drawn there would survive underneath whatever moved
+// into their place. Tagging the rows with a foreground colour derived from the
+// image id costs nothing visually — the rows hold only spaces, which have no
+// foreground — and makes them differ whenever the image behind them differs.
+//
+// Half-block thumbnails need no tag: they are ordinary text, so BubbleTea's
+// comparison already sees them change.
+func thumbMark(id uint32) string {
+	return fmt.Sprintf("\033[38;2;%d;%d;%dm", id>>16&0xff, id>>8&0xff, id&0xff)
+}
+
 // renderThumbBlock renders src as a block of exactly blockRows terminal rows,
 // for embedding inside a lipgloss box.
 //
@@ -305,9 +321,10 @@ func renderThumbBlock(src image.Image, maxCols, blockRows int, id uint32) string
 		return renderImageBlockView(src, maxCols, blockRows)
 	}
 
+	mark := thumbMark(id)
 	var sb strings.Builder
-	sb.WriteString(strings.Repeat("\n", avail))
-	fmt.Fprintf(&sb, "\033[%dA", avail)
+	sb.WriteString(strings.Repeat(mark+"\n", avail))
+	fmt.Fprintf(&sb, "%s\033[%dA", mark, avail)
 	sb.WriteString(data)
 	if back := avail - rows; back > 0 {
 		fmt.Fprintf(&sb, "\033[%dB", back)

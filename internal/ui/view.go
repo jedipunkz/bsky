@@ -195,12 +195,12 @@ func detailImageURL(post api.Post) string {
 	return imgs[0].Thumb
 }
 
-// thumbID derives a Kitty image id from a thumbnail's URL, so that repainting
-// the same picture replaces its placement instead of stacking another copy on
-// top of it.
-func thumbID(url string) uint32 {
+// thumbID identifies one post's thumbnail. Repainting the same picture then
+// replaces its Kitty placement instead of stacking another copy on top of it,
+// and two posts sharing an image still get one id each.
+func thumbID(post api.Post, url string) uint32 {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(url))
+	_, _ = h.Write([]byte(post.URI + "\x00" + url))
 	id := h.Sum32()
 	if id <= kittyImageID {
 		id += kittyImageID + 1 // stay clear of the detail view's fixed id
@@ -221,7 +221,7 @@ func (m *Model) renderThumb(post api.Post, width int) string {
 	if !ok {
 		return strings.Repeat("\n", thumbRows-1)
 	}
-	id := thumbID(url)
+	id := thumbID(post, url)
 	if !supportsSixel() && supportsKitty() {
 		if m.frameThumbs == nil {
 			m.frameThumbs = make(map[uint32]bool)
@@ -229,7 +229,7 @@ func (m *Model) renderThumb(post api.Post, width int) string {
 		m.frameThumbs[id] = true
 	}
 	// Keyed by width too: the profile overlay renders the same post narrower.
-	key := fmt.Sprintf("%s|%d", url, width)
+	key := fmt.Sprintf("%d|%d", id, width)
 	s, ok := m.thumbCache[key]
 	if !ok {
 		s = renderThumbBlock(img, width, thumbRows, id)

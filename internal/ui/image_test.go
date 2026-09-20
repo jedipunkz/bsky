@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math/rand"
 	"strings"
 	"testing"
 
@@ -213,5 +214,70 @@ func TestRenderThumbBlock_SixelRowAccounting(t *testing.T) {
 	}
 	if back := blockRows - 1 - rows; back > 0 && !strings.Contains(out, fmt.Sprintf("\x1b[%dB", back)) {
 		t.Errorf("missing cursor-down %d", back)
+	}
+}
+
+// BubbleTea skips repainting a line that is byte-identical to the last frame.
+// A thumbnail's rows hold nothing but spaces, so without a per-image tag two
+// scroll positions can render such a row identically, the row is never
+// repainted, and the pixels drawn on it stay on screen on top of whatever moved
+// into their place. The seeds below are layouts where that happens.
+func TestThumbRows_RepaintWhenTheImageMoves(t *testing.T) {
+	t.Setenv("BSKY_SIXEL", "1")
+	const url = "https://cdn.example/thumb.jpg"
+
+	pixelRows := func(lines []string) []int {
+		var rows []int
+		for i, l := range lines {
+			if strings.Contains(l, "\x1bP") { // Sixel DCS
+				rows = append(rows, i)
+			}
+		}
+		return rows
+	}
+	covers := func(rows []int, r int) bool {
+		for _, e := range rows {
+			if r > e-thumbRows && r <= e {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, seed := range []int64{8, 27, 54} {
+		rng := rand.New(rand.NewSource(seed))
+		m := newTestModel()
+		m.width, m.height = 80, 30
+		m.imageCache[url] = testImage(800, 450)
+		for i := range 15 {
+			post := api.Post{
+				URI:    fmt.Sprintf("at://post/%d", i),
+				Author: api.Author{DisplayName: fmt.Sprintf("user%d", i), Handle: fmt.Sprintf("u%d.example", i)},
+				Record: api.PostRecord{Text: strings.Repeat("word ", 1+rng.Intn(40))},
+			}
+			if rng.Intn(3) == 0 {
+				post.Embed = &api.PostEmbedView{Images: []api.EmbedImageView{{Thumb: url}}}
+			}
+			m.feeds[tabHome].items = append(m.feeds[tabHome].items, api.FeedItem{Post: post})
+		}
+		render := func(cursor int) []string {
+			m.feeds[tabHome].cursor = cursor
+			return strings.Split(m.View(), "\n")
+		}
+
+		for cursor := range 10 {
+			before, after := render(cursor), render(cursor+1)
+			for _, e := range pixelRows(before) {
+				for r := e - thumbRows + 1; r <= e; r++ {
+					if r >= len(after) || covers(pixelRows(after), r) {
+						continue // off screen, or painted over by the redraw
+					}
+					if before[r] == after[r] {
+						t.Errorf("seed %d, cursor %d->%d: row %d is unchanged, so the pixels on it are never erased",
+							seed, cursor, cursor+1, r)
+					}
+				}
+			}
+		}
 	}
 }
