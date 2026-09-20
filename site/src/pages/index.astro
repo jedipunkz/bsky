@@ -4,6 +4,23 @@ import Terminal from '../components/Terminal.astro';
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 
+const schema = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'bsky',
+  applicationCategory: 'DeveloperApplication',
+  description:
+    'A terminal user interface for Bluesky, written in Go: Home and Discover feeds, vim-style keys, inline images and four color themes.',
+  operatingSystem: 'macOS, Linux',
+  url: 'https://jedipunkz.github.io/bsky/',
+  downloadUrl: 'https://github.com/jedipunkz/bsky/releases',
+  codeRepository: 'https://github.com/jedipunkz/bsky',
+  license: 'https://opensource.org/licenses/MIT',
+  programmingLanguage: 'Go',
+  author: { '@type': 'Person', name: 'jedipunkz' },
+  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+};
+
 const features = [
   {
     icon: '◧',
@@ -114,6 +131,12 @@ const themes = [
   title="bsky — a Bluesky TUI for your terminal"
   description="bsky is a terminal user interface for Bluesky, written in Go: Home and Discover feeds, vim-style keys, inline images and four color themes."
 >
+  <script
+    type="application/ld+json"
+    slot="head"
+    is:inline
+    set:html={JSON.stringify(schema)}
+  />
   <section class="hero">
     <div class="container hero__inner">
       <div class="hero__copy">
