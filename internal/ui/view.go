@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,8 +17,8 @@ func (m *Model) View() string {
 	if m.width == 0 {
 		return "Loading..."
 	}
-	m.frameThumbs = make(map[uint32]bool)
 	frame := m.view()
+	m.frameThumbs = placedThumbs(frame)
 	// The deletes go in front of the frame: prepending them also makes the first
 	// line differ from the last frame, which is what gets BubbleTea to write that
 	// line at all, and with it the deletes.
@@ -222,12 +223,6 @@ func (m *Model) renderThumb(post api.Post, width int) string {
 		return strings.Repeat("\n", thumbRows-1)
 	}
 	id := thumbID(post, url)
-	if !supportsSixel() && supportsKitty() {
-		if m.frameThumbs == nil {
-			m.frameThumbs = make(map[uint32]bool)
-		}
-		m.frameThumbs[id] = true
-	}
 	// Keyed by width too: the profile overlay renders the same post narrower.
 	key := fmt.Sprintf("%d|%d", id, width)
 	s, ok := m.thumbCache[key]
@@ -236,6 +231,35 @@ func (m *Model) renderThumb(post api.Post, width int) string {
 		m.thumbCache[key] = s
 	}
 	return s
+}
+
+// placedThumbs returns the ids of the Kitty images a finished frame actually
+// draws.
+//
+// Which thumbnails were rendered is not the same question: a post is rendered
+// to measure it and then dropped when it does not fit, and a post at the bottom
+// edge is truncated, which can cut off the line carrying the escape sequence.
+// Either way the picture never reaches the terminal, and an image counted as
+// drawn would never be deleted — it would sit on screen over the posts that
+// took its place.
+func placedThumbs(frame string) map[uint32]bool {
+	const key = "\033_Ga=T,f=100,i="
+	ids := map[uint32]bool{}
+	for rest := frame; ; {
+		i := strings.Index(rest, key)
+		if i < 0 {
+			return ids
+		}
+		rest = rest[i+len(key):]
+		end := strings.IndexByte(rest, ',')
+		if end < 0 {
+			return ids
+		}
+		if id, err := strconv.ParseUint(rest[:end], 10, 32); err == nil {
+			ids[uint32(id)] = true
+		}
+		rest = rest[end:]
+	}
 }
 
 // deleteFrames is how many frames a departed thumbnail keeps asking to be
