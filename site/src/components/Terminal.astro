@@ -1,9 +1,11 @@
 ---
 interface Props {
   title?: string;
+  /** Drop the body padding — for a screenshot that fills the window. */
+  flush?: boolean;
 }
 
-const { title = 'bsky' } = Astro.props;
+const { title = 'bsky', flush = false } = Astro.props;
 ---
 
 <div class="term">
@@ -13,7 +15,7 @@ const { title = 'bsky' } = Astro.props;
     <span class="term__dot term__dot--green"></span>
     <span class="term__title">{title}</span>
   </div>
-  <div class="term__body">
+  <div class:list={['term__body', flush && 'term__body--flush']}>
     <slot />
   </div>
 </div>
@@ -59,5 +61,16 @@ const { title = 'bsky' } = Astro.props;
     font-size: 0.84rem;
     line-height: 1.65;
     overflow-x: auto;
+  }
+
+  .term__body--flush {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .term__body--flush :global(img) {
+    display: block;
+    width: 100%;
+    height: auto;
   }
 </style>

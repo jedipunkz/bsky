@@ -2,6 +2,8 @@
 import Layout from '../layouts/Layout.astro';
 import Terminal from '../components/Terminal.astro';
 
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+
 const features = [
   {
     icon: '◧',
@@ -133,37 +135,13 @@ const themes = [
       </div>
 
       <div class="hero__demo">
-        <Terminal title="bsky — home">
-          <div class="tui">
-            <div class="tui__tabs">
-              <span class="tui__tab tui__tab--on">Home</span>
-              <span class="tui__tab">Discover</span>
-            </div>
-            <div class="tui__post tui__post--sel">
-              <span class="tui__handle">@alice.bsky.social</span>
-              <span class="tui__time">2m</span>
-              <div class="tui__text">Shipped the terminal client. It is fast.</div>
-              <div class="tui__meta">♥ 12 &nbsp; ⇄ 3 &nbsp; 💬 2</div>
-            </div>
-            <div class="tui__post">
-              <span class="tui__handle">@bob.bsky.social</span>
-              <span class="tui__time">14m</span>
-              <div class="tui__text">Catppuccin Mocha everywhere, including here.</div>
-              <div class="tui__meta">♥ 41 &nbsp; ⇄ 9 &nbsp; 💬 6</div>
-            </div>
-            <div class="tui__post">
-              <span class="tui__handle">@carol.bsky.social</span>
-              <span class="tui__time">1h</span>
-              <div class="tui__text">j / k to scroll, c to compose, q to quit.</div>
-              <div class="tui__meta">♥ 7 &nbsp; ⇄ 1 &nbsp; 💬 0</div>
-            </div>
-            <div class="tui__status">
-              <span class="tui__status-key">j/k</span> scroll
-              <span class="tui__status-key">h/l</span> tab
-              <span class="tui__status-key">c</span> compose
-              <span class="tui__status-key">q</span> quit
-            </div>
-          </div>
+        <Terminal title="bsky — discover" flush>
+          <img
+            src={`${base}/tui.png`}
+            width="920"
+            height="810"
+            alt="The bsky TUI on the Discover tab: a tab bar with Home, Discover and Saved, a selected post marked with a left bar, posts with handles, timestamps and like counts, an inline image thumbnail, and a status line showing the j/k, h/l, c, r, g/G and q keys."
+          />
         </Terminal>
       </div>
     </div>
@@ -398,72 +376,6 @@ theme: catppuccin</code></pre>
     font-family: var(--font-mono);
     font-size: 0.8rem;
     color: var(--fg-faint);
-  }
-
-  /* Fake TUI inside the hero terminal */
-  .tui__tabs {
-    display: flex;
-    gap: 1.25rem;
-    padding-bottom: 0.6rem;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 0.85rem;
-  }
-
-  .tui__tab {
-    color: var(--fg-faint);
-  }
-
-  .tui__tab--on {
-    color: var(--ctp-mauve);
-    font-weight: 600;
-    box-shadow: inset 0 -2px 0 var(--ctp-mauve);
-  }
-
-  .tui__post {
-    padding: 0.5rem 0.6rem;
-    border-left: 2px solid transparent;
-    border-radius: 4px;
-  }
-
-  .tui__post--sel {
-    border-left-color: var(--ctp-mauve);
-    background: color-mix(in srgb, var(--ctp-surface0) 55%, transparent);
-  }
-
-  .tui__handle {
-    color: var(--ctp-blue);
-  }
-
-  .tui__time {
-    margin-left: 0.5rem;
-    color: var(--fg-faint);
-    font-size: 0.78rem;
-  }
-
-  .tui__text {
-    color: var(--fg);
-  }
-
-  .tui__meta {
-    color: var(--ctp-overlay0);
-    font-size: 0.78rem;
-  }
-
-  .tui__status {
-    margin-top: 0.9rem;
-    padding-top: 0.6rem;
-    border-top: 1px solid var(--border);
-    color: var(--fg-faint);
-    font-size: 0.78rem;
-  }
-
-  .tui__status-key {
-    color: var(--ctp-peach);
-    margin-left: 0.6rem;
-  }
-
-  .tui__status-key:first-child {
-    margin-left: 0;
   }
 
   .grid {
