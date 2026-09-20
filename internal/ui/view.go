@@ -2,7 +2,9 @@ package ui
 
 import (
 	"fmt"
+	"hash/fnv"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,7 +17,15 @@ func (m *Model) View() string {
 	if m.width == 0 {
 		return "Loading..."
 	}
+	frame := m.view()
+	m.frameThumbs = placedThumbs(frame)
+	// The deletes go in front of the frame: prepending them also makes the first
+	// line differ from the last frame, which is what gets BubbleTea to write that
+	// line at all, and with it the deletes.
+	return m.reapThumbs() + frame
+}
 
+func (m *Model) view() string {
 	if m.state == stateDetail || (m.state == stateCompose && m.prevState == stateDetail) {
 		base := m.renderDetailFull()
 		if m.state == stateCompose {
@@ -145,9 +155,6 @@ func (m *Model) renderPostMeta(post api.Post) string {
 	if post.ReplyCount > 0 {
 		parts = append(parts, metaStyle.Render(fmt.Sprintf("✦ %d", post.ReplyCount)))
 	}
-	if n := len(post.Embed.EmbedImages()); n > 0 {
-		parts = append(parts, metaStyle.Render(fmt.Sprintf("🖼 %d", n)))
-	}
 	if m.isBookmarked(post.URI) {
 		parts = append(parts, bookmarkedStyle.Render("★"))
 	}
@@ -155,6 +162,142 @@ func (m *Model) renderPostMeta(post api.Post) string {
 		return ""
 	}
 	return strings.Join(parts, metaStyle.Render("  "))
+}
+
+// thumbRows is the height, in terminal rows, of the image preview under a post
+// in the list view. Small enough that a post with a picture still leaves room
+// for its neighbours on screen.
+const thumbRows = 5
+
+// thumbURL returns the URL to show for a post's first embedded image in the
+// list view: the server-side thumbnail, which is far smaller than the full
+// image and more than a few-rows-tall preview can resolve anyway.
+func thumbURL(post api.Post) string {
+	imgs := post.Embed.EmbedImages()
+	if len(imgs) == 0 {
+		return ""
+	}
+	if imgs[0].Thumb != "" {
+		return imgs[0].Thumb
+	}
+	return imgs[0].Fullsize
+}
+
+// detailImageURL returns the URL to show for a post's first embedded image in
+// the detail view, which has the room for the full-size one.
+func detailImageURL(post api.Post) string {
+	imgs := post.Embed.EmbedImages()
+	if len(imgs) == 0 {
+		return ""
+	}
+	if imgs[0].Fullsize != "" {
+		return imgs[0].Fullsize
+	}
+	return imgs[0].Thumb
+}
+
+// thumbID identifies one post's thumbnail. Repainting the same picture then
+// replaces its Kitty placement instead of stacking another copy on top of it,
+// and two posts sharing an image still get one id each.
+func thumbID(post api.Post, url string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(post.URI + "\x00" + url))
+	id := h.Sum32()
+	if id <= kittyImageID {
+		id += kittyImageID + 1 // stay clear of the detail view's fixed id
+	}
+	return id
+}
+
+// renderThumb renders a post's first embedded image as a thumbnail block of
+// exactly thumbRows rows, or "" when the post has no image. The rows are
+// reserved while the image is still downloading (and stay blank if it failed)
+// so the feed does not reflow when it arrives.
+func (m *Model) renderThumb(post api.Post, width int) string {
+	url := thumbURL(post)
+	if url == "" {
+		return ""
+	}
+	img, ok := m.imageCache[url]
+	if !ok {
+		return strings.Repeat("\n", thumbRows-1)
+	}
+	id := thumbID(post, url)
+	// Keyed by width too: the profile overlay renders the same post narrower.
+	key := fmt.Sprintf("%d|%d", id, width)
+	s, ok := m.thumbCache[key]
+	if !ok {
+		s = renderThumbBlock(img, width, thumbRows, id)
+		m.thumbCache[key] = s
+	}
+	return s
+}
+
+// placedThumbs returns the ids of the Kitty images a finished frame actually
+// draws.
+//
+// Which thumbnails were rendered is not the same question: a post is rendered
+// to measure it and then dropped when it does not fit, and a post at the bottom
+// edge is truncated, which can cut off the line carrying the escape sequence.
+// Either way the picture never reaches the terminal, and an image counted as
+// drawn would never be deleted — it would sit on screen over the posts that
+// took its place.
+func placedThumbs(frame string) map[uint32]bool {
+	const key = "\033_Ga=T,f=100,i="
+	ids := map[uint32]bool{}
+	for rest := frame; ; {
+		i := strings.Index(rest, key)
+		if i < 0 {
+			return ids
+		}
+		rest = rest[i+len(key):]
+		end := strings.IndexByte(rest, ',')
+		if end < 0 {
+			return ids
+		}
+		if id, err := strconv.ParseUint(rest[:end], 10, 32); err == nil {
+			ids[uint32(id)] = true
+		}
+		rest = rest[end:]
+	}
+}
+
+// deleteFrames is how many frames a departed thumbnail keeps asking to be
+// deleted. BubbleTea renders on a ticker and keeps only the newest frame, so a
+// delete that is emitted once can be dropped before it ever reaches the
+// terminal, leaving the picture on screen for good.
+const deleteFrames = 3
+
+// reapThumbs deletes the Kitty placements of the thumbnails that were on a
+// previous frame but are not on this one. Kitty images outlive the text they
+// were drawn over, so a post scrolling away would otherwise leave its picture
+// behind on top of whatever took its place. Sixel needs none of this: its
+// pixels belong to the cells, and repainting them clears the image.
+func (m *Model) reapThumbs() string {
+	for id := range m.shownThumbs {
+		if !m.frameThumbs[id] {
+			if m.pendingDeletes == nil {
+				m.pendingDeletes = make(map[uint32]int)
+			}
+			m.pendingDeletes[id] = deleteFrames
+		}
+	}
+	m.shownThumbs = m.frameThumbs
+
+	var sb strings.Builder
+	for id, left := range m.pendingDeletes {
+		if m.frameThumbs[id] {
+			delete(m.pendingDeletes, id) // back on screen, and drawn by its own line
+			continue
+		}
+		sb.WriteString(deleteKittyImage(id))
+		if left <= 1 {
+			delete(m.pendingDeletes, id)
+		} else {
+			m.pendingDeletes[id] = left - 1
+		}
+	}
+	return sb.String()
 }
 
 // renderFeedItem renders a single feed item as a styled post box of the given
@@ -176,6 +319,12 @@ func (m *Model) renderFeedItem(item api.FeedItem, selected bool, width int) stri
 	parts := []string{
 		renderPostHeader(post, inner, nameSt, handleSt),
 		renderTextWithLinks(post.Record, inner, textSt),
+	}
+	// The thumbnail goes under the text rather than beside it: a picture column
+	// would indent the name and the text of image posts only, and the feed reads
+	// as one column.
+	if thumb := m.renderThumb(post, inner); thumb != "" {
+		parts = append(parts, thumb)
 	}
 	if meta := m.renderPostMeta(post); meta != "" {
 		parts = append(parts, meta)
@@ -327,12 +476,8 @@ func (m *Model) renderDetailFull() string {
 
 	// Build image block: always exactly availableForImage rows (availableForImage-1 \n chars).
 	var imgBlock string
-	embedImgs := post.Embed.EmbedImages()
-	if len(embedImgs) > 0 && availableForImage > 0 {
-		imgURL := embedImgs[0].Fullsize
-		if imgURL == "" {
-			imgURL = embedImgs[0].Thumb
-		}
+	imgURL := detailImageURL(post)
+	if imgURL != "" && availableForImage > 0 {
 		if img, ok := m.imageCache[imgURL]; ok {
 			// Render at display time so size always matches current available space.
 			imgBlock = renderImageForView(img, maxCols, availableForImage)

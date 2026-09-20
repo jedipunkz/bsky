@@ -24,6 +24,7 @@ func newTestModel() *Model {
 		imageCache:   make(map[string]image.Image),
 		imageLoading: make(map[string]bool),
 		imageError:   make(map[string]string),
+		thumbCache:   make(map[string]string),
 	}
 }
 

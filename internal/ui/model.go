@@ -137,9 +137,13 @@ type Model struct {
 	profileFeeds     [profileTabCount]feedList
 	profilePrevState state
 
-	imageCache   map[string]image.Image // URL -> decoded image (rendered at display time)
-	imageLoading map[string]bool        // URL -> loading in progress
-	imageError   map[string]string      // URL -> error message
+	imageCache     map[string]image.Image // URL -> decoded image (rendered at display time)
+	imageLoading   map[string]bool        // URL -> loading in progress
+	imageError     map[string]string      // URL -> error message
+	thumbCache     map[string]string      // URL|width -> rendered list-view thumbnail
+	frameThumbs    map[uint32]bool        // Kitty image ids drawn by the frame being rendered
+	shownThumbs    map[uint32]bool        // Kitty image ids the previous frame left on screen
+	pendingDeletes map[uint32]int         // Kitty image id -> frames left to repeat its delete
 }
 
 func New(client *api.Client, theme string) *Model {
@@ -163,6 +167,7 @@ func New(client *api.Client, theme string) *Model {
 		imageCache:   make(map[string]image.Image),
 		imageLoading: make(map[string]bool),
 		imageError:   make(map[string]string),
+		thumbCache:   make(map[string]string),
 	}
 }
 
@@ -225,7 +230,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.id.kind == listSearch {
 			m.reportSearch(msg)
 		}
-		return m, nil
+		return m, m.fetchVisibleThumbsCmd()
 
 	case imageFetchedMsg:
 		delete(m.imageLoading, msg.url)
@@ -336,10 +341,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stateSearch:
 		return m.updateSearch(msg)
 	case stateUserProfile:
-		return m.updateUserProfile(msg)
+		return m.withThumbs(m.updateUserProfile(msg))
 	default:
-		return m.updateTimeline(msg)
+		return m.withThumbs(m.updateTimeline(msg))
 	}
+}
+
+// withThumbs adds thumbnail downloads for the posts now on screen to cmd, so
+// that every cursor move keeps the visible window of images filled.
+func (m *Model) withThumbs(mod tea.Model, cmd tea.Cmd) (tea.Model, tea.Cmd) {
+	thumbs := m.fetchVisibleThumbsCmd()
+	if thumbs == nil {
+		return mod, cmd
+	}
+	return mod, tea.Batch(cmd, thumbs)
 }
 
 func decrement(n int) int {

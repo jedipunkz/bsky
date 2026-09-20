@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math/rand"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/jedipunkz/bsky/internal/api"
 )
 
 func testImage(w, h int) image.Image {
@@ -152,5 +155,194 @@ func TestRenderImageKittyView_ChunksPayload(t *testing.T) {
 	}
 	if !strings.Contains(out, "m=0;") {
 		t.Error("the final chunk must be flagged m=0")
+	}
+}
+
+// A feed item must keep the same geometry whether its thumbnail has arrived or
+// not, so the list does not reflow when a download finishes.
+func TestRenderFeedItem_ThumbnailGeometryIsStable(t *testing.T) {
+	t.Setenv("BSKY_SIXEL", "0")
+	t.Setenv("BSKY_KITTY", "0")
+	m := newTestModel()
+	const url = "https://cdn.example/thumb.jpg"
+	item := api.FeedItem{Post: api.Post{
+		Record: api.PostRecord{Text: "a post with a picture"},
+		Embed:  &api.PostEmbedView{Images: []api.EmbedImageView{{Thumb: url}}},
+	}}
+
+	pending := m.renderFeedItem(item, false, 60)
+	m.imageCache[url] = testImage(400, 200)
+	loaded := m.renderFeedItem(item, false, 60)
+
+	if got, want := lipgloss.Height(loaded), lipgloss.Height(pending); got != want {
+		t.Errorf("height with thumbnail = %d, without = %d", got, want)
+	}
+	if h := lipgloss.Height(loaded); h < thumbRows {
+		t.Errorf("height = %d, want at least thumbRows (%d)", h, thumbRows)
+	}
+	if got, want := lipgloss.Width(loaded), lipgloss.Width(pending); got != want {
+		t.Errorf("width with thumbnail = %d, without = %d", got, want)
+	}
+	// The thumbnail must actually be drawn: block pixels carry 24-bit colour.
+	if !strings.Contains(loaded, "\x1b[48;2;") {
+		t.Error("loaded item has no block pixels")
+	}
+}
+
+// The Sixel thumbnail draws its pixels on the last line of the block and must
+// leave the cursor on that same line, or every post below it shifts.
+func TestRenderThumbBlock_SixelRowAccounting(t *testing.T) {
+	t.Setenv("BSKY_SIXEL", "1")
+	const blockRows = 5
+	out := renderThumbBlock(testImage(400, 200), 40, blockRows, 99)
+
+	if got := strings.Count(out, "\n"); got != blockRows-1 {
+		t.Errorf("block spans %d newlines, want %d", got, blockRows-1)
+	}
+	if !strings.Contains(out, "\x1bP") {
+		t.Fatal("no Sixel data in block")
+	}
+	if lipgloss.Width(out) != 0 {
+		t.Errorf("block last line measures %d cells wide, want 0", lipgloss.Width(out))
+	}
+	// cursor-up to the top of the block, pixels, then back down to the last line.
+	cols, rows := imageDims(testImage(400, 200), 40, blockRows-1)
+	_ = cols
+	wantUp := fmt.Sprintf("\x1b[%dA", blockRows-1)
+	if !strings.Contains(out, wantUp) {
+		t.Errorf("missing cursor-up %q", wantUp)
+	}
+	if back := blockRows - 1 - rows; back > 0 && !strings.Contains(out, fmt.Sprintf("\x1b[%dB", back)) {
+		t.Errorf("missing cursor-down %d", back)
+	}
+}
+
+// BubbleTea skips repainting a line that is byte-identical to the last frame.
+// A thumbnail's rows hold nothing but spaces, so without a per-image tag two
+// scroll positions can render such a row identically, the row is never
+// repainted, and the pixels drawn on it stay on screen on top of whatever moved
+// into their place. The seeds below are layouts where that happens.
+func TestThumbRows_RepaintWhenTheImageMoves(t *testing.T) {
+	t.Setenv("BSKY_SIXEL", "1")
+	const url = "https://cdn.example/thumb.jpg"
+
+	pixelRows := func(lines []string) []int {
+		var rows []int
+		for i, l := range lines {
+			if strings.Contains(l, "\x1bP") { // Sixel DCS
+				rows = append(rows, i)
+			}
+		}
+		return rows
+	}
+	covers := func(rows []int, r int) bool {
+		for _, e := range rows {
+			if r > e-thumbRows && r <= e {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, seed := range []int64{8, 27, 54} {
+		rng := rand.New(rand.NewSource(seed))
+		m := newTestModel()
+		m.width, m.height = 80, 30
+		m.imageCache[url] = testImage(800, 450)
+		for i := range 15 {
+			post := api.Post{
+				URI:    fmt.Sprintf("at://post/%d", i),
+				Author: api.Author{DisplayName: fmt.Sprintf("user%d", i), Handle: fmt.Sprintf("u%d.example", i)},
+				Record: api.PostRecord{Text: strings.Repeat("word ", 1+rng.Intn(40))},
+			}
+			if rng.Intn(3) == 0 {
+				post.Embed = &api.PostEmbedView{Images: []api.EmbedImageView{{Thumb: url}}}
+			}
+			m.feeds[tabHome].items = append(m.feeds[tabHome].items, api.FeedItem{Post: post})
+		}
+		render := func(cursor int) []string {
+			m.feeds[tabHome].cursor = cursor
+			return strings.Split(m.View(), "\n")
+		}
+
+		for cursor := range 10 {
+			before, after := render(cursor), render(cursor+1)
+			for _, e := range pixelRows(before) {
+				for r := e - thumbRows + 1; r <= e; r++ {
+					if r >= len(after) || covers(pixelRows(after), r) {
+						continue // off screen, or painted over by the redraw
+					}
+					if before[r] == after[r] {
+						t.Errorf("seed %d, cursor %d->%d: row %d is unchanged, so the pixels on it are never erased",
+							seed, cursor, cursor+1, r)
+					}
+				}
+			}
+		}
+	}
+}
+
+// A Kitty thumbnail must delete its previous placement before making a new one:
+// a placement that is not replaced stays where the post used to be, and the
+// picture shows up twice.
+func TestRenderThumbBlock_KittyDeletesBeforePlacing(t *testing.T) {
+	t.Setenv("BSKY_SIXEL", "0")
+	t.Setenv("BSKY_KITTY", "1")
+	out := renderThumbBlock(testImage(400, 200), 40, thumbRows, 4242)
+
+	del, place := strings.Index(out, "a=d"), strings.Index(out, "a=T")
+	switch {
+	case del < 0:
+		t.Error("no delete before the placement")
+	case place < 0:
+		t.Fatal("no Kitty placement in block")
+	case del > place:
+		t.Error("delete comes after the placement")
+	}
+	if !strings.Contains(out, "i=4242") {
+		t.Error("placement does not carry the image id")
+	}
+}
+
+// A thumbnail that scrolls off screen has to be deleted, and the delete has to
+// be repeated: BubbleTea keeps only the newest frame, so one emitted once can
+// be dropped before it reaches the terminal.
+func TestReapThumbs_DeletesDepartedImagesRepeatedly(t *testing.T) {
+	t.Setenv("BSKY_SIXEL", "0")
+	t.Setenv("BSKY_KITTY", "1")
+	const url = "https://cdn.example/thumb.jpg"
+	m := newTestModel()
+	m.width, m.height = 80, 24
+	m.imageCache[url] = testImage(800, 450)
+	for i := range 12 {
+		post := api.Post{
+			URI:    fmt.Sprintf("at://post/%d", i),
+			Author: api.Author{DisplayName: fmt.Sprintf("user%d", i), Handle: fmt.Sprintf("u%d.example", i)},
+			Record: api.PostRecord{Text: fmt.Sprintf("post number %d", i)},
+		}
+		if i == 0 {
+			post.Embed = &api.PostEmbedView{Images: []api.EmbedImageView{{Thumb: url}}}
+		}
+		m.feeds[tabHome].items = append(m.feeds[tabHome].items, api.FeedItem{Post: post})
+	}
+	want := fmt.Sprintf("i=%d", thumbID(m.feeds[tabHome].items[0].Post, url))
+
+	// The reaper writes in front of the frame; a thumbnail's own delete-then-place
+	// sits further down, on the line that draws it.
+	head := func() string { return strings.SplitN(m.View(), "\n", 2)[0] }
+
+	m.feeds[tabHome].cursor = 0
+	if strings.Contains(head(), want) {
+		t.Error("deleted a thumbnail that is on screen")
+	}
+	// Scroll past it: the cursor post is rendered at the top, so the image is gone.
+	m.feeds[tabHome].cursor = 4
+	for i := range deleteFrames {
+		if h := head(); !strings.Contains(h, "a=d,d=I,"+want) {
+			t.Errorf("frame %d after it left the screen carries no delete for it", i)
+		}
+	}
+	if strings.Contains(head(), want) {
+		t.Error("delete is still repeated after deleteFrames frames")
 	}
 }
