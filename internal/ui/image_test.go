@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/jedipunkz/bsky/internal/api"
 )
 
 func testImage(w, h int) image.Image {
@@ -152,5 +154,34 @@ func TestRenderImageKittyView_ChunksPayload(t *testing.T) {
 	}
 	if !strings.Contains(out, "m=0;") {
 		t.Error("the final chunk must be flagged m=0")
+	}
+}
+
+// A feed item must keep the same geometry whether its thumbnail has arrived or
+// not, so the list does not reflow when a download finishes.
+func TestRenderFeedItem_ThumbnailGeometryIsStable(t *testing.T) {
+	m := newTestModel()
+	const url = "https://cdn.example/thumb.jpg"
+	item := api.FeedItem{Post: api.Post{
+		Record: api.PostRecord{Text: "a post with a picture"},
+		Embed:  &api.PostEmbedView{Images: []api.EmbedImageView{{Thumb: url}}},
+	}}
+
+	pending := m.renderFeedItem(item, false, 60)
+	m.imageCache[url] = testImage(400, 200)
+	loaded := m.renderFeedItem(item, false, 60)
+
+	if got, want := lipgloss.Height(loaded), lipgloss.Height(pending); got != want {
+		t.Errorf("height with thumbnail = %d, without = %d", got, want)
+	}
+	if h := lipgloss.Height(loaded); h < thumbRows {
+		t.Errorf("height = %d, want at least thumbRows (%d)", h, thumbRows)
+	}
+	if got, want := lipgloss.Width(loaded), lipgloss.Width(pending); got != want {
+		t.Errorf("width with thumbnail = %d, without = %d", got, want)
+	}
+	// The thumbnail must actually be drawn: block pixels carry 24-bit colour.
+	if !strings.Contains(loaded, "\x1b[48;2;") {
+		t.Error("loaded item has no block pixels")
 	}
 }

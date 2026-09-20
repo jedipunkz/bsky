@@ -160,33 +160,58 @@ func (m *Model) toggleFollow(profile *api.Profile) tea.Cmd {
 	}
 }
 
-// fetchDetailImageCmd downloads the first embedded image of the post open in
-// the detail view, unless it is already cached, loading or known to fail.
-func (m *Model) fetchDetailImageCmd() tea.Cmd {
-	imgs := m.detailItem.Post.Embed.EmbedImages()
-	if len(imgs) == 0 {
+// fetchImageCmd downloads url, unless it is already cached, in flight, or
+// known to fail. Returns nil when there is nothing to do.
+func (m *Model) fetchImageCmd(url string) tea.Cmd {
+	if url == "" {
 		return nil
 	}
-	imgURL := imgs[0].Fullsize
-	if imgURL == "" {
-		imgURL = imgs[0].Thumb
-	}
-	if imgURL == "" {
+	if _, cached := m.imageCache[url]; cached {
 		return nil
 	}
-	if _, cached := m.imageCache[imgURL]; cached {
+	if m.imageLoading[url] {
 		return nil
 	}
-	if m.imageLoading[imgURL] {
+	if _, hasErr := m.imageError[url]; hasErr {
 		return nil
 	}
-	if _, hasErr := m.imageError[imgURL]; hasErr {
-		return nil
-	}
-	m.imageLoading[imgURL] = true
+	m.imageLoading[url] = true
 
 	return func() tea.Msg {
-		img, err := downloadImage(imgURL)
-		return imageFetchedMsg{url: imgURL, img: img, err: err}
+		img, err := downloadImage(url)
+		return imageFetchedMsg{url: url, img: img, err: err}
 	}
+}
+
+// fetchDetailImageCmd downloads the full-size image of the post open in the
+// detail view.
+func (m *Model) fetchDetailImageCmd() tea.Cmd {
+	return m.fetchImageCmd(detailImageURL(m.detailItem.Post))
+}
+
+// thumbWindow is how many posts on either side of the cursor get their
+// thumbnail downloaded: enough to cover the screen without pulling a whole
+// page of images for posts the reader may never scroll to.
+const thumbWindow = 8
+
+// fetchVisibleThumbsCmd downloads the thumbnails of the posts around the
+// cursor of the list currently on screen.
+func (m *Model) fetchVisibleThumbsCmd() tea.Cmd {
+	l := m.thumbList()
+	var cmds []tea.Cmd
+	for i := max(l.cursor-thumbWindow, 0); i < min(l.cursor+thumbWindow+1, len(l.items)); i++ {
+		if c := m.fetchImageCmd(thumbURL(l.items[i].Post)); c != nil {
+			cmds = append(cmds, c)
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+// thumbList returns the list whose thumbnails are currently visible.
+func (m *Model) thumbList() *feedList {
+	if m.state == stateUserProfile {
+		return &m.profileFeeds[m.profileActiveTab]
+	}
+	l, _ := m.currentList()
+	return l
 }

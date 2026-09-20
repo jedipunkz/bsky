@@ -157,6 +157,65 @@ func (m *Model) renderPostMeta(post api.Post) string {
 	return strings.Join(parts, metaStyle.Render("  "))
 }
 
+// Size of the list-view thumbnail, in terminal cells. Small enough that a post
+// with an image stays about as tall as one without, so the feed keeps its rhythm.
+const (
+	thumbCols = 16
+	thumbRows = 4
+)
+
+// thumbURL returns the URL to show for a post's first embedded image in the
+// list view: the server-side thumbnail, which is far smaller than the full
+// image and all a 16x4 cell block can resolve anyway.
+func thumbURL(post api.Post) string {
+	imgs := post.Embed.EmbedImages()
+	if len(imgs) == 0 {
+		return ""
+	}
+	if imgs[0].Thumb != "" {
+		return imgs[0].Thumb
+	}
+	return imgs[0].Fullsize
+}
+
+// detailImageURL returns the URL to show for a post's first embedded image in
+// the detail view, which has the room for the full-size one.
+func detailImageURL(post api.Post) string {
+	imgs := post.Embed.EmbedImages()
+	if len(imgs) == 0 {
+		return ""
+	}
+	if imgs[0].Fullsize != "" {
+		return imgs[0].Fullsize
+	}
+	return imgs[0].Thumb
+}
+
+// renderThumb renders a post's first embedded image as a thumbnail occupying
+// exactly thumbCols x thumbRows cells, or "" when the post has no image. The
+// cells are reserved while the image is still downloading (and kept blank if it
+// fails) so the surrounding text does not reflow when it arrives.
+func (m *Model) renderThumb(post api.Post) string {
+	url := thumbURL(post)
+	if url == "" {
+		return ""
+	}
+	box := lipgloss.NewStyle().Width(thumbCols).MarginRight(1)
+	img, ok := m.imageCache[url]
+	if !ok {
+		return box.Render(strings.Repeat("\n", thumbRows-1))
+	}
+	s, ok := m.thumbCache[url]
+	if !ok {
+		// Half-blocks only: Kitty and Sixel position pixels by cursor movement,
+		// which lipgloss cannot account for when it lays the block out inside a
+		// bordered box. Only the detail view, which owns the whole screen, uses them.
+		s = renderImageBlockView(img, thumbCols, thumbRows)
+		m.thumbCache[url] = s
+	}
+	return box.Render(s)
+}
+
 // renderFeedItem renders a single feed item as a styled post box of the given
 // outer width (border and padding included).
 func (m *Model) renderFeedItem(item api.FeedItem, selected bool, width int) string {
@@ -167,12 +226,17 @@ func (m *Model) renderFeedItem(item api.FeedItem, selected bool, width int) stri
 		boxSt = selectedPostStyle
 	}
 
+	post := item.Post
+	thumb := m.renderThumb(post)
+
 	inner := width - 2 // horizontal padding (2); the left border sits outside Width
+	if thumb != "" {
+		inner -= thumbCols + 1 // thumbnail column plus its gutter
+	}
 	if inner < 20 {
 		inner = 20
 	}
 
-	post := item.Post
 	parts := []string{
 		renderPostHeader(post, inner, nameSt, handleSt),
 		renderTextWithLinks(post.Record, inner, textSt),
@@ -181,7 +245,12 @@ func (m *Model) renderFeedItem(item api.FeedItem, selected bool, width int) stri
 		parts = append(parts, meta)
 	}
 
-	return boxSt.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
+	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	if thumb != "" {
+		content = lipgloss.JoinHorizontal(lipgloss.Top, thumb, content)
+	}
+
+	return boxSt.Width(width).Render(content)
 }
 
 // fillFeedToHeight renders feed items around cur, expanding to fill height lines.
@@ -327,12 +396,8 @@ func (m *Model) renderDetailFull() string {
 
 	// Build image block: always exactly availableForImage rows (availableForImage-1 \n chars).
 	var imgBlock string
-	embedImgs := post.Embed.EmbedImages()
-	if len(embedImgs) > 0 && availableForImage > 0 {
-		imgURL := embedImgs[0].Fullsize
-		if imgURL == "" {
-			imgURL = embedImgs[0].Thumb
-		}
+	imgURL := detailImageURL(post)
+	if imgURL != "" && availableForImage > 0 {
 		if img, ok := m.imageCache[imgURL]; ok {
 			// Render at display time so size always matches current available space.
 			imgBlock = renderImageForView(img, maxCols, availableForImage)
