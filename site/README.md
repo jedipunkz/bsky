@@ -26,7 +26,7 @@ colors — with headless Chromium at a device pixel ratio of 2:
 ```js
 // npm i -D playwright  (Chromium only)
 const page = await browser.newPage({
-  viewport: { width: 920, height: 810 },
+  viewport: { width: 1200, height: 980 },
   deviceScaleFactor: 2,
 });
 await page.goto('file:///abs/path/to/site/tools/tui-mock.html');
