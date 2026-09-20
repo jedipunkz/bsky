@@ -11,11 +11,26 @@ A terminal user interface (TUI) for [Bluesky](https://bsky.app), written in Go.
 
 ## Installation
 
+### Homebrew (recommended)
+
+```bash
+brew tap jedipunkz/bsky
+brew trust jedipunkz/bsky
+brew install bsky
+```
+
+Installs a pre-built binary for macOS and Linux, on both arm64 and amd64, so Go
+is not needed. `brew trust` is required once per machine: Homebrew does not load
+formulae from a third-party tap until the tap is trusted. Upgrade with
+`brew upgrade bsky`.
+
+### go install
+
 ```bash
 go install github.com/jedipunkz/bsky@latest
 ```
 
-Or build from source:
+### From source
 
 ```bash
 git clone https://github.com/jedipunkz/bsky.git
@@ -104,7 +119,7 @@ Sixel sequences, which would leave the image area blank.
 
 ## Requirements
 
-- Go 1.24+
+- Go 1.24+ — only to install with `go install` or to build from source
 - A Bluesky account with an [App Password](https://bsky.app/settings/app-passwords)
 
 ## License
