@@ -1,0 +1,26 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+
+<Layout title="404 — bsky" description="This page does not exist.">
+  <section class="section notfound">
+    <div class="container">
+      <span class="eyebrow">Error 404</span>
+      <h1 class="section__title">No such route</h1>
+      <p class="section__lead">
+        The page you asked for is not here. <code>q</code> would quit, but this is
+        a browser.
+      </p>
+      <p><a href={`${base}/`}>← Back to the home page</a></p>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .notfound {
+    border-top: none;
+    padding-block: 6rem;
+  }
+</style>

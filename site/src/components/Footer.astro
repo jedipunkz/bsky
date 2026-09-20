@@ -1,0 +1,58 @@
+---
+const year = new Date().getFullYear();
+---
+
+<footer class="site-footer">
+  <div class="container site-footer__inner">
+    <p>
+      MIT licensed · <a href="https://github.com/jedipunkz/bsky">jedipunkz/bsky</a>
+    </p>
+    <p class="site-footer__theme">
+      Palette: <a href="https://github.com/catppuccin/catppuccin">Catppuccin Mocha</a>
+      <span class="swatches" aria-hidden="true">
+        <i style="background: var(--ctp-mauve)"></i>
+        <i style="background: var(--ctp-blue)"></i>
+        <i style="background: var(--ctp-teal)"></i>
+        <i style="background: var(--ctp-green)"></i>
+        <i style="background: var(--ctp-peach)"></i>
+        <i style="background: var(--ctp-red)"></i>
+      </span>
+    </p>
+    <p class="site-footer__copy">© {year} jedipunkz</p>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    border-top: 1px solid var(--border);
+    background: var(--bg-raised);
+    color: var(--fg-faint);
+    font-size: 0.88rem;
+  }
+
+  .site-footer__inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem 1.5rem;
+    padding-block: 1.75rem;
+  }
+
+  .site-footer p {
+    margin: 0;
+  }
+
+  .swatches {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: 0.5rem;
+    vertical-align: middle;
+  }
+
+  .swatches i {
+    width: 11px;
+    height: 11px;
+    border-radius: 999px;
+  }
+</style>
