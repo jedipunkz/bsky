@@ -77,17 +77,29 @@ If `theme` is not set or is an unrecognized value, `tokyonight` is used.
 
 ### Images
 
-Images in the detail view are drawn with half-block characters (`▀`), which work
-in any terminal with 24-bit colour support.
+In terminals that speak the Kitty graphics protocol (Kitty, Ghostty, WezTerm, and
+multiplexers that forward it such as herdr) the detail view draws pixel-accurate
+images automatically. Everywhere else it falls back to half-block characters
+(`▀`), which work in any terminal with 24-bit colour support.
 
-If your terminal supports the Sixel graphics protocol, set `BSKY_SIXEL=1` for
-pixel-accurate images:
+Override the automatic choice with `BSKY_KITTY`:
+
+```sh
+BSKY_KITTY=1 bsky   # force the Kitty graphics protocol
+BSKY_KITTY=0 bsky   # force the half-block renderer
+```
+
+Detection is skipped inside tmux and zellij: they do not forward the sequence by
+default, so those sessions stay on half-blocks.
+
+For the Sixel protocol, set `BSKY_SIXEL=1`:
 
 ```sh
 BSKY_SIXEL=1 bsky
 ```
 
-Sixel is opt-in because terminal multiplexers (tmux, zellij, ...) usually drop
+Sixel stays opt-in and takes precedence over Kitty when set. It cannot be
+auto-detected reliably: multiplexers (tmux, zellij, herdr, ...) usually drop
 Sixel sequences, which would leave the image area blank.
 
 ## Requirements
