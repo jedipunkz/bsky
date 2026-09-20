@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://jedipunkz.github.io/bsky/sitemap-index.xml
