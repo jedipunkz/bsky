@@ -2,9 +2,10 @@
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 
-// GitHub Pages (project site): https://jedipunkz.github.io/bsky/
+// GitHub Pages project site, served on the jedipunkz.rocks custom domain:
+// https://jedipunkz.rocks/bsky/ (github.io 301-redirects here).
 export default defineConfig({
-  site: 'https://jedipunkz.github.io',
+  site: 'https://jedipunkz.rocks',
   base: '/bsky',
   trailingSlash: 'ignore',
   build: {
