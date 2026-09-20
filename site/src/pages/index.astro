@@ -1,0 +1,509 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Terminal from '../components/Terminal.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+const features = [
+  {
+    icon: '◧',
+    color: 'var(--ctp-mauve)',
+    title: 'Home & Discover',
+    body: 'Browse the timeline you follow and the Discover feed, switching tabs without leaving the keyboard.',
+  },
+  {
+    icon: '✎',
+    color: 'var(--ctp-blue)',
+    title: 'Compose posts',
+    body: 'Write and publish a post of up to 300 characters, with a live counter while you type.',
+  },
+  {
+    icon: '⌨',
+    color: 'var(--ctp-green)',
+    title: 'Vim-style keys',
+    body: 'j / k to scroll, h / l to switch tabs, g / G to jump. The bindings you already have in your fingers.',
+  },
+  {
+    icon: '⟳',
+    color: 'var(--ctp-teal)',
+    title: 'Session persistence',
+    body: 'Log in once with an App Password. The session is stored locally and reused on the next run.',
+  },
+  {
+    icon: '▦',
+    color: 'var(--ctp-peach)',
+    title: 'Inline images',
+    body: 'Pixel-accurate images through the Kitty graphics protocol or Sixel, with a half-block fallback anywhere else.',
+  },
+  {
+    icon: '◐',
+    color: 'var(--ctp-pink)',
+    title: 'Four color themes',
+    body: 'Tokyo Night, Kanagawa Wave, Solarized Dark and Catppuccin Mocha — one line of YAML to switch.',
+  },
+];
+
+const installs = [
+  {
+    label: 'Homebrew',
+    note: 'Recommended. Pre-built binaries for macOS and Linux, arm64 and amd64 — no Go needed.',
+    code: `brew tap jedipunkz/bsky
+brew trust jedipunkz/bsky
+brew install bsky`,
+  },
+  {
+    label: 'go install',
+    note: 'Requires Go 1.26 or newer, as declared in go.mod.',
+    code: 'go install github.com/jedipunkz/bsky@latest',
+  },
+  {
+    label: 'From source',
+    note: 'Clone and build the binary yourself.',
+    code: `git clone https://github.com/jedipunkz/bsky.git
+cd bsky
+go build -o bsky .`,
+  },
+];
+
+const keys = [
+  { key: 'j', action: 'Scroll down' },
+  { key: 'k', action: 'Scroll up' },
+  { key: 'h', action: 'Previous tab' },
+  { key: 'l', action: 'Next tab' },
+  { key: 'c', action: 'Compose a new post' },
+  { key: 'r', action: 'Refresh current feed' },
+  { key: 'g', action: 'Jump to top' },
+  { key: 'G', action: 'Jump to bottom' },
+  { key: 'q', action: 'Quit' },
+];
+
+const composeKeys = [
+  { key: 'Ctrl+S', action: 'Send post' },
+  { key: 'Esc', action: 'Cancel' },
+];
+
+const themes = [
+  {
+    id: 'tokyonight',
+    name: 'Tokyo Night',
+    note: 'Dark blue — default',
+    swatch: ['#1a1b26', '#7aa2f7', '#bb9af7', '#9ece6a'],
+  },
+  {
+    id: 'kanagawa',
+    name: 'Kanagawa Wave',
+    note: 'Warm dark',
+    swatch: ['#1f1f28', '#7e9cd8', '#957fb8', '#98bb6c'],
+  },
+  {
+    id: 'solarized',
+    name: 'Solarized Dark',
+    note: 'The classic',
+    swatch: ['#002b36', '#268bd2', '#d33682', '#859900'],
+  },
+  {
+    id: 'catppuccin',
+    name: 'Catppuccin Mocha',
+    note: 'Pastel dark — this site',
+    swatch: ['#1e1e2e', '#89b4fa', '#cba6f7', '#a6e3a1'],
+  },
+];
+---
+
+<Layout
+  title="bsky — a Bluesky TUI for your terminal"
+  description="bsky is a terminal user interface for Bluesky, written in Go: Home and Discover feeds, vim-style keys, inline images and four color themes."
+>
+  <section class="hero">
+    <div class="container hero__inner">
+      <div class="hero__copy">
+        <span class="eyebrow">Bluesky · in your terminal</span>
+        <h1 class="hero__title">
+          Read and post to Bluesky<br />
+          <span class="hero__accent">without leaving the shell.</span>
+        </h1>
+        <p class="hero__lead">
+          <strong>bsky</strong> is a terminal user interface written in Go. Home and
+          Discover feeds, vim-style navigation, inline images and a persistent
+          session — in one binary.
+        </p>
+        <div class="hero__actions">
+          <a class="btn btn--primary" href="#install">Install</a>
+          <a class="btn" href="https://github.com/jedipunkz/bsky">View on GitHub</a>
+        </div>
+        <p class="hero__meta">MIT · macOS &amp; Linux · arm64 &amp; amd64</p>
+      </div>
+
+      <div class="hero__demo">
+        <Terminal title="bsky — discover" flush>
+          <img
+            src={`${base}/tui.png`}
+            width="1200"
+            height="980"
+            alt="The bsky TUI on the Discover tab: a tab bar with Home, Discover and Saved, a selected post marked with a left bar, posts with handles, timestamps and like counts, an inline image thumbnail, and a status line showing the j/k, h/l, c, r, g/G and q keys."
+          />
+        </Terminal>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="features">
+    <div class="container">
+      <span class="eyebrow">Features</span>
+      <h2 class="section__title">Everything the client does</h2>
+      <p class="section__lead">
+        A small, focused client: read, post, navigate. No configuration required
+        beyond logging in.
+      </p>
+      <div class="grid">
+        {
+          features.map((feature) => (
+            <article class="card feature">
+              <span class="feature__icon" style={`color: ${feature.color}`}>
+                {feature.icon}
+              </span>
+              <h3 class="feature__title">{feature.title}</h3>
+              <p class="feature__body">{feature.body}</p>
+            </article>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="install">
+    <div class="container">
+      <span class="eyebrow">Install</span>
+      <h2 class="section__title">Three ways to get it</h2>
+      <p class="section__lead">
+        <code>brew trust</code> is required once per machine: Homebrew does not load
+        formulae from a third-party tap until the tap is trusted.
+      </p>
+      <div class="install">
+        {
+          installs.map((item) => (
+            <article class="card install__item">
+              <h3 class="install__label">{item.label}</h3>
+              <p class="install__note">{item.note}</p>
+              <pre><code>{item.code}</code></pre>
+            </article>
+          ))
+        }
+      </div>
+      <div class="card first-run">
+        <h3 class="install__label">First run</h3>
+        <p class="install__note">
+          Run <code>bsky</code>. You are asked for your handle and an{' '}
+          <a href="https://bsky.app/settings/app-passwords">App Password</a>; the
+          session is saved for subsequent runs.
+        </p>
+        <pre><code>bsky</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="keys">
+    <div class="container">
+      <span class="eyebrow">Keybindings</span>
+      <h2 class="section__title">Hands stay on the home row</h2>
+      <div class="keys">
+        <div class="card">
+          <h3 class="keys__title">Normal mode</h3>
+          <table>
+            <thead>
+              <tr><th>Key</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+              {
+                keys.map((row) => (
+                  <tr>
+                    <td><kbd>{row.key}</kbd></td>
+                    <td>{row.action}</td>
+                  </tr>
+                ))
+              }
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h3 class="keys__title">Compose mode</h3>
+          <table>
+            <thead>
+              <tr><th>Key</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+              {
+                composeKeys.map((row) => (
+                  <tr>
+                    <td><kbd>{row.key}</kbd></td>
+                    <td>{row.action}</td>
+                  </tr>
+                ))
+              }
+            </tbody>
+          </table>
+          <h3 class="keys__title keys__title--spaced">Images</h3>
+          <p class="keys__note">
+            Kitty graphics are detected automatically and fall back to half-blocks
+            (<code>▀</code>). Override with <code>BSKY_KITTY=1</code> or
+            <code>BSKY_KITTY=0</code>; opt into Sixel with <code>BSKY_SIXEL=1</code>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="themes">
+    <div class="container">
+      <span class="eyebrow">Themes</span>
+      <h2 class="section__title">Pick a palette</h2>
+      <p class="section__lead">
+        The config file lives at <code>~/.config/bsky/config.yaml</code>. Set
+        <code>theme</code> to one of the four values below; anything unrecognized
+        falls back to <code>tokyonight</code>.
+      </p>
+      <div class="themes">
+        {
+          themes.map((theme) => (
+            <article class="card theme">
+              <div class="theme__swatch" aria-hidden="true">
+                {theme.swatch.map((color) => (
+                  <i style={`background: ${color}`} />
+                ))}
+              </div>
+              <h3 class="theme__name">{theme.name}</h3>
+              <p class="theme__note">{theme.note}</p>
+              <code class="theme__id">theme: {theme.id}</code>
+            </article>
+          ))
+        }
+      </div>
+      <pre class="themes__yaml"><code># ~/.config/bsky/config.yaml
+theme: catppuccin</code></pre>
+    </div>
+  </section>
+
+  <section class="section cta">
+    <div class="container cta__inner">
+      <div>
+        <h2 class="section__title">Try it in one line</h2>
+        <p class="section__lead">
+          Go 1.26+ and a Bluesky App Password are all you need.
+        </p>
+      </div>
+      <pre><code>brew tap jedipunkz/bsky &amp;&amp; brew trust jedipunkz/bsky &amp;&amp; brew install bsky</code></pre>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .hero {
+    padding-block: clamp(3rem, 2rem + 6vw, 6rem);
+  }
+
+  .hero__inner {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+    gap: clamp(2rem, 1rem + 4vw, 3.5rem);
+    align-items: center;
+  }
+
+  .hero__title {
+    font-size: clamp(2rem, 1.35rem + 2.6vw, 3rem);
+    text-wrap: balance;
+    margin-bottom: 1rem;
+  }
+
+  .hero__accent {
+    background: linear-gradient(100deg, var(--ctp-mauve), var(--ctp-blue) 55%, var(--ctp-teal));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .hero__lead {
+    color: var(--fg-muted);
+    font-size: 1.06rem;
+    max-width: 52ch;
+  }
+
+  .hero__lead strong {
+    color: var(--fg);
+    font-family: var(--font-mono);
+    font-weight: 600;
+  }
+
+  .hero__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 1.75rem;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.6rem 1.25rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    color: var(--fg);
+    font-size: 0.95rem;
+    font-weight: 500;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .btn:hover {
+    text-decoration: none;
+    border-color: var(--ctp-lavender);
+    background: color-mix(in srgb, var(--ctp-lavender) 10%, transparent);
+  }
+
+  .btn--primary {
+    background: var(--ctp-mauve);
+    border-color: var(--ctp-mauve);
+    color: var(--ctp-crust);
+    font-weight: 600;
+  }
+
+  .btn--primary:hover {
+    background: var(--ctp-lavender);
+    border-color: var(--ctp-lavender);
+    color: var(--ctp-crust);
+  }
+
+  .hero__meta {
+    margin-top: 1.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--fg-faint);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .feature__icon {
+    font-size: 1.35rem;
+    line-height: 1;
+  }
+
+  .feature__title {
+    font-size: 1.05rem;
+    margin: 0.6rem 0 0.35rem;
+  }
+
+  .feature__body {
+    margin: 0;
+    color: var(--fg-muted);
+    font-size: 0.93rem;
+  }
+
+  .install {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .install__label {
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    color: var(--ctp-green);
+    margin-bottom: 0.35rem;
+  }
+
+  .install__note {
+    margin: 0 0 0.9rem;
+    color: var(--fg-muted);
+    font-size: 0.9rem;
+  }
+
+  .first-run {
+    margin-top: 1rem;
+  }
+
+  .keys {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1rem;
+    margin-top: 2rem;
+    align-items: start;
+  }
+
+  .keys__title {
+    font-size: 0.95rem;
+    color: var(--ctp-lavender);
+    margin-bottom: 0.5rem;
+  }
+
+  .keys__title--spaced {
+    margin-top: 1.5rem;
+  }
+
+  .keys__note {
+    margin: 0;
+    color: var(--fg-muted);
+    font-size: 0.9rem;
+  }
+
+  .themes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .theme__swatch {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 0.85rem;
+  }
+
+  .theme__swatch i {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    border: 1px solid var(--border-strong);
+  }
+
+  .theme__name {
+    font-size: 1rem;
+    margin-bottom: 0.2rem;
+  }
+
+  .theme__note {
+    margin: 0 0 0.75rem;
+    color: var(--fg-muted);
+    font-size: 0.88rem;
+  }
+
+  .theme__id {
+    font-size: 0.82rem;
+    color: var(--ctp-peach);
+  }
+
+  .themes__yaml {
+    margin-top: 1rem;
+  }
+
+  .cta__inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem;
+  }
+
+  .cta .section__lead {
+    margin-bottom: 0;
+  }
+
+  @media (max-width: 860px) {
+    .hero__inner {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>

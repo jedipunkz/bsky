@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+  :root {
+    --crust: #11111b;
+    --base: #1e1e2e;
+    --surface0: #313244;
+    --surface1: #45475a;
+    --overlay1: #7f849c;
+    --subtext0: #a6adc8;
+    --text: #cdd6f4;
+    --lavender: #b4befe;
+    --blue: #89b4fa;
+    --mauve: #cba6f7;
+    --green: #a6e3a1;
+    --peach: #fab387;
+    --red: #f38ba8;
+    --yellow: #f9e2af;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--base); }
+  body {
+    width: 1200px;
+    height: 980px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--text);
+    padding: 14px 18px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .tabs {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    margin-bottom: 14px;
+  }
+  .tab { padding: 1px 10px; color: var(--subtext0); }
+  .tab--on { background: var(--lavender); color: var(--crust); font-weight: 700; }
+  .who { margin-left: auto; color: var(--overlay1); }
+
+  .post { padding: 0 0 0 14px; margin-bottom: 18px; border-left: 3px solid transparent; }
+  .post--sel { border-left-color: var(--lavender); background: #232338; }
+  .head { display: flex; align-items: baseline; gap: 10px; }
+  .name { font-weight: 700; color: var(--text); }
+  .handle { color: var(--overlay1); }
+  .time { margin-left: auto; color: var(--overlay1); }
+  .body { color: var(--text); white-space: pre-wrap; }
+  .en { color: var(--subtext0); }
+  .stats { color: var(--overlay1); display: flex; gap: 18px; }
+  .stats .h { color: var(--red); }
+  .stats .r { color: var(--green); }
+  .stats .s { color: var(--yellow); }
+  .link-block { margin-top: 6px; color: var(--overlay1); }
+  .score { color: var(--peach); }
+  .links a { color: var(--blue); text-decoration: underline; }
+  .links .sep { color: var(--surface1); }
+  .thumb {
+    width: 104px;
+    height: 104px;
+    margin: 8px 0 6px;
+    border: 1px solid var(--surface1);
+    display: block;
+  }
+  .status {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    padding: 8px 18px;
+    background: var(--crust);
+    border-top: 1px solid var(--surface0);
+    color: var(--overlay1);
+    font-size: 14px;
+  }
+  .status b { color: var(--peach); font-weight: 400; }
+</style>
+</head>
+<body>
+  <div class="tabs">
+    <span class="tab">Home</span>
+    <span class="tab tab--on">Discover</span>
+    <span class="tab">Saved</span>
+    <span class="who">@jedipunkz.bsky.social</span>
+  </div>
+
+  <div class="post post--sel">
+    <div class="head"><span class="name">ada</span><span class="handle">@ada.bsky.social</span><span class="time">4h</span></div>
+    <div class="body">Rewrote my feed reader as a TUI over the weekend.
+No tabs, no notifications, no infinite scroll — just j and k.
+Turns out the timeline is much easier to put down when it fits in 80 columns.</div>
+  </div>
+
+  <div class="post">
+    <div class="head"><span class="name">kate</span><span class="handle">@kate.bsky.social</span><span class="time">4h</span></div>
+    <div class="body">Ships as a single binary, so it also works on the box I ssh into. That was the whole point.</div>
+    <div class="stats"><span><span class="h">♥</span> 2</span></div>
+  </div>
+
+  <div class="post">
+    <div class="head"><span class="name">Link Feed</span><span class="handle">@linkfeed.bsky.social</span><span class="time">6h</span></div>
+    <div class="body">Why terminal interfaces keep outliving the frameworks that replaced them</div>
+    <div class="en">A short history of curses, and what modern TUIs borrowed from it</div>
+    <div class="link-block">
+      <div><span class="score">▲</span> 331</div>
+      <div>💬 38</div>
+      <div class="links">🔗 <a href="#">Post</a> <span class="sep">|</span> <a href="#">Article</a></div>
+      <div><span class="s">✦</span> 1</div>
+    </div>
+  </div>
+
+  <div class="post">
+    <div class="head"><span class="name">kate</span><span class="handle">@kate.bsky.social</span><span class="time">6h</span></div>
+    <div class="body">Next release lands on October 14.</div>
+    <div class="stats"><span><span class="h">♥</span> 1</span></div>
+  </div>
+
+  <div class="post">
+    <div class="head"><span class="name">Link Feed</span><span class="handle">@linkfeed.bsky.social</span><span class="time">8h</span></div>
+    <div class="body">If a protocol is more than its clients, we should celebrate the rest of it</div>
+    <div class="en">On AT Protocol, small clients, and the software that never makes the launch post</div>
+    <div class="link-block">
+      <div><span class="score">▲</span> 335</div>
+      <div>💬 48</div>
+      <div class="links">🔗 <a href="#">Post</a> <span class="sep">|</span> <a href="#">Article</a></div>
+      <div><span class="h">♥</span> 2 &nbsp; <span class="s">✦</span> 1</div>
+    </div>
+  </div>
+
+  <div class="post">
+    <div class="head"><span class="name">pixel garden</span><span class="handle">@pixelgarden.bsky.social</span><span class="time">2h</span></div>
+    <div class="body">plants that survived the summer, as sprites</div>
+    <svg class="thumb" viewBox="0 0 32 32" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg">
+      <rect width="32" height="32" fill="#45475a"/>
+      <rect x="1" y="1" width="30" height="20" fill="#89dceb"/>
+      <rect x="1" y="21" width="30" height="10" fill="#a6adc8"/>
+      <rect x="4" y="14" width="7" height="7" fill="#f9e2af"/>
+      <rect x="5" y="11" width="5" height="3" fill="#a6e3a1"/>
+      <rect x="6" y="8" width="3" height="3" fill="#a6e3a1"/>
+      <rect x="14" y="13" width="8" height="8" fill="#fab387"/>
+      <rect x="16" y="9" width="4" height="4" fill="#94e2d5"/>
+      <rect x="15" y="6" width="6" height="3" fill="#94e2d5"/>
+      <rect x="24" y="16" width="5" height="5" fill="#cba6f7"/>
+      <rect x="25" y="12" width="3" height="4" fill="#a6e3a1"/>
+      <rect x="2" y="24" width="28" height="1" fill="#7f849c"/>
+    </svg>
+    <div class="stats">
+      <span><span class="h">♥</span> 6010</span>
+      <span><span class="r">↺</span> 2307</span>
+      <span><span class="s">✦</span> 29</span>
+    </div>
+  </div>
+
+  <div class="status">
+    <b>j/k</b> scroll &nbsp; <b>h/l</b> tab &nbsp; <b>c</b> compose &nbsp; <b>r</b> refresh &nbsp; <b>g/G</b> top/bottom &nbsp; <b>q</b> quit
+  </div>
+</body>
+</html>
