@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"strings"
@@ -64,5 +65,92 @@ func TestSupportsSixel_OptIn(t *testing.T) {
 	t.Setenv("BSKY_SIXEL", "1")
 	if !supportsSixel() {
 		t.Error("BSKY_SIXEL=1 must enable Sixel")
+	}
+}
+
+func TestSupportsKitty_AutoDetect(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{"wezterm", map[string]string{"TERM_PROGRAM": "WezTerm"}, true},
+		{"ghostty term", map[string]string{"TERM": "xterm-ghostty"}, true},
+		{"kitty window id", map[string]string{"KITTY_WINDOW_ID": "1"}, true},
+		{"plain xterm", map[string]string{"TERM": "xterm-256color"}, false},
+		// tmux and zellij do not forward the APC sequence; herdr does, so it is not listed.
+		{"inside tmux", map[string]string{"TERM_PROGRAM": "WezTerm", "TMUX": "/tmp/tmux-0/default"}, false},
+		{"inside zellij", map[string]string{"TERM_PROGRAM": "WezTerm", "ZELLIJ": "0"}, false},
+		{"forced off", map[string]string{"TERM_PROGRAM": "WezTerm", "BSKY_KITTY": "0"}, false},
+		{"forced on", map[string]string{"TERM": "xterm-256color", "BSKY_KITTY": "1"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, k := range []string{"TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "TMUX", "ZELLIJ", "BSKY_KITTY"} {
+				t.Setenv(k, "")
+			}
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			if got := supportsKitty(); got != tc.want {
+				t.Errorf("supportsKitty() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRenderImageKittyView_RowAccountingAndProtocol(t *testing.T) {
+	const maxCols, availableRows = 60, 20
+	out := renderImageKittyView(testImage(400, 200), maxCols, availableRows)
+	if out == "" {
+		t.Fatal("renderImageKittyView returned empty string")
+	}
+
+	// The layout contract: exactly (availableRows-1) newlines, no visible cells.
+	if got := strings.Count(out, "\n"); got != availableRows-1 {
+		t.Errorf("newline count = %d, want %d", got, availableRows-1)
+	}
+	if w := ansi.StringWidth(out); w != 0 {
+		t.Errorf("rendered width = %d cells, want 0 (escape sequences only)", w)
+	}
+
+	// q=2 keeps the terminal's replies off stdin, C=1 keeps the cursor under our control,
+	// and non-zero i=/p= make a repaint replace the placement instead of stacking one.
+	for _, want := range []string{"\033_Ga=T,f=100,", "q=2,", "C=1,", "i=8151,", "p=1,"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in the Kitty command", want)
+		}
+	}
+
+	// Cursor moves up and back down by the same number of rows.
+	up := strings.Index(out, "\033[")
+	if up < 0 {
+		t.Fatal("no cursor movement found")
+	}
+	var upRows, downRows int
+	if _, err := fmt.Sscanf(out[up:], "\033[%dA", &upRows); err != nil {
+		t.Fatalf("cursor-up parse: %v", err)
+	}
+	down := strings.LastIndex(out, "\033[")
+	if _, err := fmt.Sscanf(out[down:], "\033[%dB", &downRows); err != nil {
+		t.Fatalf("cursor-down parse: %v", err)
+	}
+	if upRows != downRows || upRows < 1 {
+		t.Errorf("cursor up %d rows, down %d rows; want equal and >= 1", upRows, downRows)
+	}
+}
+
+func TestRenderImageKittyView_ChunksPayload(t *testing.T) {
+	out := renderImageKittyView(testImage(800, 800), 200, 60)
+	// A large image must be split, every chunk but the last flagged m=1.
+	chunks := strings.Count(out, "\033_G")
+	if chunks < 2 {
+		t.Fatalf("got %d Kitty chunks, want the payload split into several", chunks)
+	}
+	if got := strings.Count(out, "m=1;"); got != chunks-1 {
+		t.Errorf("m=1 appears %d times across %d chunks, want %d", got, chunks, chunks-1)
+	}
+	if !strings.Contains(out, "m=0;") {
+		t.Error("the final chunk must be flagged m=0")
 	}
 }

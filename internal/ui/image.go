@@ -2,12 +2,13 @@ package ui
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"image"
 	"image/color"
 	_ "image/gif"
 	_ "image/jpeg"
-	_ "image/png"
+	"image/png"
 	"net/http"
 	"os"
 	"strings"
@@ -74,6 +75,44 @@ func supportsSixel() bool {
 	return os.Getenv("BSKY_SIXEL") == "1"
 }
 
+const (
+	// Chunk size mandated by the Kitty graphics protocol for escape-code transmission.
+	kittyChunkBytes = 4096
+	// Fixed image and placement IDs. A zero placement ID is an "internal" one, which
+	// lets placements stack: every repaint would add another copy of the same image.
+	// Non-zero IDs mean one image and one placement that later repaints replace.
+	kittyImageID     = 8151
+	kittyPlacementID = 1
+)
+
+// supportsKitty reports whether the Kitty graphics protocol can be used.
+//
+// Unlike Sixel this can be auto-detected. Kitty graphics survive herdr, which parses
+// the APC sequence into its own terminal state and re-emits it to the outer terminal,
+// so the multiplexer concern that keeps Sixel opt-in does not apply to it. tmux and
+// zellij do not forward the sequence, so they stay on the half-block renderer.
+// BSKY_KITTY=1 forces it on, BSKY_KITTY=0 forces it off.
+func supportsKitty() bool {
+	if v := os.Getenv("BSKY_KITTY"); v != "" {
+		return v == "1"
+	}
+	if os.Getenv("TMUX") != "" || os.Getenv("ZELLIJ") != "" {
+		return false
+	}
+	if os.Getenv("KITTY_WINDOW_ID") != "" {
+		return true
+	}
+	switch os.Getenv("TERM") {
+	case "xterm-kitty", "xterm-ghostty":
+		return true
+	}
+	switch strings.ToLower(os.Getenv("TERM_PROGRAM")) {
+	case "wezterm", "ghostty":
+		return true
+	}
+	return false
+}
+
 // renderImageForView renders src into a string suitable for embedding in BubbleTea's View().
 //
 // availableRows is the exact number of terminal rows reserved for the image in the layout.
@@ -90,6 +129,11 @@ func supportsSixel() bool {
 //	BubbleTea renders the empty placeholder lines first, then the Sixel line overwrites
 //	them.  On subsequent diff-renders, unchanged lines are skipped, so the Sixel persists.
 //
+// Kitty strategy (when supported):
+//
+//	The same placeholder trick, with a Kitty APC sequence in place of the Sixel DCS.
+//	See renderImageKittyView.
+//
 // Block-char fallback:
 //
 //	pixterm half-block (▀) rendering, padded to exactly availableRows rows.
@@ -97,8 +141,14 @@ func renderImageForView(src image.Image, maxCols, availableRows int) string {
 	if availableRows < 1 {
 		return ""
 	}
+	// Sixel first: it is an explicit opt-in, so it wins over auto-detected Kitty.
 	if supportsSixel() {
 		if s := renderImageSixelView(src, maxCols, availableRows); s != "" {
+			return s
+		}
+	}
+	if supportsKitty() {
+		if s := renderImageKittyView(src, maxCols, availableRows); s != "" {
 			return s
 		}
 	}
@@ -131,6 +181,60 @@ func renderImageSixelView(src image.Image, maxCols, availableRows int) string {
 	placeholder := strings.Repeat("\n", sixelRows)
 	cursorUp := fmt.Sprintf("\033[%dA", rows)
 	return placeholder + cursorUp + buf.String()
+}
+
+// renderImageKittyView builds the Kitty graphics image string, using the same
+// placeholder trick as the Sixel path so BubbleTea's line count stays exact:
+//
+//	"\n" × (availableRows-1)   ← placeholder lines BubbleTea counts
+//	cursor-up rows             ← back to the start of the image area
+//	<Kitty APC chunks>         ← C=1 keeps the cursor where it is
+//	cursor-down rows           ← leave the cursor where the placeholder left it
+//
+// q=2 suppresses the terminal's success and error replies. Without it they arrive on
+// stdin and BubbleTea reads them as key presses.
+func renderImageKittyView(src image.Image, maxCols, availableRows int) string {
+	kittyRows := availableRows - 1
+	if kittyRows < 1 {
+		return ""
+	}
+	cols, rows := imageDims(src, maxCols, kittyRows)
+
+	// Downscale before encoding: source images run to several megapixels and this
+	// re-encodes on every repaint. The terminal scales the result into the c×r cell box.
+	dst := image.NewRGBA(image.Rect(0, 0, cols*8, rows*16))
+	draw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, dst); err != nil {
+		return ""
+	}
+	payload := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	var sb strings.Builder
+	sb.WriteString(strings.Repeat("\n", kittyRows))
+	fmt.Fprintf(&sb, "\033[%dA", rows)
+	for first := true; len(payload) > 0; first = false {
+		chunk := payload
+		if len(chunk) > kittyChunkBytes {
+			chunk = chunk[:kittyChunkBytes]
+		}
+		payload = payload[len(chunk):]
+		more := 0
+		if len(payload) > 0 {
+			more = 1
+		}
+		if first {
+			// a=T transmits and displays in one command, f=100 is PNG.
+			fmt.Fprintf(&sb, "\033_Ga=T,f=100,i=%d,p=%d,c=%d,r=%d,C=1,q=2,m=%d;%s\033\\",
+				kittyImageID, kittyPlacementID, cols, rows, more, chunk)
+		} else {
+			// Continuation chunks carry only m; the terminal remembers the rest.
+			fmt.Fprintf(&sb, "\033_Gm=%d;%s\033\\", more, chunk)
+		}
+	}
+	fmt.Fprintf(&sb, "\033[%dB", rows)
+	return sb.String()
 }
 
 // renderImageBlockView renders src as half-block characters (▀) with ANSI 24-bit colour,
