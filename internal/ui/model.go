@@ -137,12 +137,13 @@ type Model struct {
 	profileFeeds     [profileTabCount]feedList
 	profilePrevState state
 
-	imageCache   map[string]image.Image // URL -> decoded image (rendered at display time)
-	imageLoading map[string]bool        // URL -> loading in progress
-	imageError   map[string]string      // URL -> error message
-	thumbCache   map[string]string      // URL|width -> rendered list-view thumbnail
-	frameThumbs  map[uint32]bool        // Kitty image ids drawn by the frame being rendered
-	shownThumbs  map[uint32]bool        // Kitty image ids the previous frame left on screen
+	imageCache     map[string]image.Image // URL -> decoded image (rendered at display time)
+	imageLoading   map[string]bool        // URL -> loading in progress
+	imageError     map[string]string      // URL -> error message
+	thumbCache     map[string]string      // URL|width -> rendered list-view thumbnail
+	frameThumbs    map[uint32]bool        // Kitty image ids drawn by the frame being rendered
+	shownThumbs    map[uint32]bool        // Kitty image ids the previous frame left on screen
+	pendingDeletes map[uint32]int         // Kitty image id -> frames left to repeat its delete
 }
 
 func New(client *api.Client, theme string) *Model {

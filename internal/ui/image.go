@@ -312,9 +312,13 @@ func renderThumbBlock(src image.Image, maxCols, blockRows int, id uint32) string
 	case supportsKitty():
 		data = kittyImage(src, cols, rows, id)
 		if data != "" {
-			// C=1 left the cursor untouched; move it to where the pixels ended so
-			// both protocols leave it in the same place.
-			data += fmt.Sprintf("\033[%dB", rows)
+			// Delete the previous placement of this image before making the new
+			// one. Re-placing under the same ids is documented to replace, but not
+			// every terminal does it, and a placement that is not replaced stays
+			// on screen where the post used to be: the picture appears twice.
+			// C=1 then leaves the cursor untouched, so move it to where the pixels
+			// ended and both protocols leave it in the same place.
+			data = deleteKittyImage(id) + data + fmt.Sprintf("\033[%dB", rows)
 		}
 	}
 	if data == "" {

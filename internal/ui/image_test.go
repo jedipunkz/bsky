@@ -281,3 +281,68 @@ func TestThumbRows_RepaintWhenTheImageMoves(t *testing.T) {
 		}
 	}
 }
+
+// A Kitty thumbnail must delete its previous placement before making a new one:
+// a placement that is not replaced stays where the post used to be, and the
+// picture shows up twice.
+func TestRenderThumbBlock_KittyDeletesBeforePlacing(t *testing.T) {
+	t.Setenv("BSKY_SIXEL", "0")
+	t.Setenv("BSKY_KITTY", "1")
+	out := renderThumbBlock(testImage(400, 200), 40, thumbRows, 4242)
+
+	del, place := strings.Index(out, "a=d"), strings.Index(out, "a=T")
+	switch {
+	case del < 0:
+		t.Error("no delete before the placement")
+	case place < 0:
+		t.Fatal("no Kitty placement in block")
+	case del > place:
+		t.Error("delete comes after the placement")
+	}
+	if !strings.Contains(out, "i=4242") {
+		t.Error("placement does not carry the image id")
+	}
+}
+
+// A thumbnail that scrolls off screen has to be deleted, and the delete has to
+// be repeated: BubbleTea keeps only the newest frame, so one emitted once can
+// be dropped before it reaches the terminal.
+func TestReapThumbs_DeletesDepartedImagesRepeatedly(t *testing.T) {
+	t.Setenv("BSKY_SIXEL", "0")
+	t.Setenv("BSKY_KITTY", "1")
+	const url = "https://cdn.example/thumb.jpg"
+	m := newTestModel()
+	m.width, m.height = 80, 24
+	m.imageCache[url] = testImage(800, 450)
+	for i := range 12 {
+		post := api.Post{
+			URI:    fmt.Sprintf("at://post/%d", i),
+			Author: api.Author{DisplayName: fmt.Sprintf("user%d", i), Handle: fmt.Sprintf("u%d.example", i)},
+			Record: api.PostRecord{Text: fmt.Sprintf("post number %d", i)},
+		}
+		if i == 0 {
+			post.Embed = &api.PostEmbedView{Images: []api.EmbedImageView{{Thumb: url}}}
+		}
+		m.feeds[tabHome].items = append(m.feeds[tabHome].items, api.FeedItem{Post: post})
+	}
+	want := fmt.Sprintf("i=%d", thumbID(m.feeds[tabHome].items[0].Post, url))
+
+	// The reaper writes in front of the frame; a thumbnail's own delete-then-place
+	// sits further down, on the line that draws it.
+	head := func() string { return strings.SplitN(m.View(), "\n", 2)[0] }
+
+	m.feeds[tabHome].cursor = 0
+	if strings.Contains(head(), want) {
+		t.Error("deleted a thumbnail that is on screen")
+	}
+	// Scroll past it: the cursor post is rendered at the top, so the image is gone.
+	m.feeds[tabHome].cursor = 4
+	for i := range deleteFrames {
+		if h := head(); !strings.Contains(h, "a=d,d=I,"+want) {
+			t.Errorf("frame %d after it left the screen carries no delete for it", i)
+		}
+	}
+	if strings.Contains(head(), want) {
+		t.Error("delete is still repeated after deleteFrames frames")
+	}
+}

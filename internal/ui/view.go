@@ -238,19 +238,41 @@ func (m *Model) renderThumb(post api.Post, width int) string {
 	return s
 }
 
-// reapThumbs deletes the Kitty placements of the thumbnails that were on the
+// deleteFrames is how many frames a departed thumbnail keeps asking to be
+// deleted. BubbleTea renders on a ticker and keeps only the newest frame, so a
+// delete that is emitted once can be dropped before it ever reaches the
+// terminal, leaving the picture on screen for good.
+const deleteFrames = 3
+
+// reapThumbs deletes the Kitty placements of the thumbnails that were on a
 // previous frame but are not on this one. Kitty images outlive the text they
 // were drawn over, so a post scrolling away would otherwise leave its picture
 // behind on top of whatever took its place. Sixel needs none of this: its
 // pixels belong to the cells, and repainting them clears the image.
 func (m *Model) reapThumbs() string {
-	var sb strings.Builder
 	for id := range m.shownThumbs {
 		if !m.frameThumbs[id] {
-			sb.WriteString(deleteKittyImage(id))
+			if m.pendingDeletes == nil {
+				m.pendingDeletes = make(map[uint32]int)
+			}
+			m.pendingDeletes[id] = deleteFrames
 		}
 	}
 	m.shownThumbs = m.frameThumbs
+
+	var sb strings.Builder
+	for id, left := range m.pendingDeletes {
+		if m.frameThumbs[id] {
+			delete(m.pendingDeletes, id) // back on screen, and drawn by its own line
+			continue
+		}
+		sb.WriteString(deleteKittyImage(id))
+		if left <= 1 {
+			delete(m.pendingDeletes, id)
+		} else {
+			m.pendingDeletes[id] = left - 1
+		}
+	}
 	return sb.String()
 }
 
