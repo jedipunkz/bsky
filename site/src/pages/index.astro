@@ -53,7 +53,7 @@ brew install bsky`,
   },
   {
     label: 'go install',
-    note: 'Requires Go 1.24 or newer.',
+    note: 'Requires Go 1.26 or newer, as declared in go.mod.',
     code: 'go install github.com/jedipunkz/bsky@latest',
   },
   {
@@ -288,10 +288,10 @@ theme: catppuccin</code></pre>
       <div>
         <h2 class="section__title">Try it in one line</h2>
         <p class="section__lead">
-          Go 1.24+ and a Bluesky App Password are all you need.
+          Go 1.26+ and a Bluesky App Password are all you need.
         </p>
       </div>
-      <pre><code>brew tap jedipunkz/bsky &amp;&amp; brew install bsky</code></pre>
+      <pre><code>brew tap jedipunkz/bsky &amp;&amp; brew trust jedipunkz/bsky &amp;&amp; brew install bsky</code></pre>
     </div>
   </section>
 </Layout>
