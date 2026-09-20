@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"hash/fnv"
 	"regexp"
 	"strings"
 	"time"
@@ -15,7 +16,15 @@ func (m *Model) View() string {
 	if m.width == 0 {
 		return "Loading..."
 	}
+	m.frameThumbs = make(map[uint32]bool)
+	frame := m.view()
+	// The deletes go in front of the frame: prepending them also makes the first
+	// line differ from the last frame, which is what gets BubbleTea to write that
+	// line at all, and with it the deletes.
+	return m.reapThumbs() + frame
+}
 
+func (m *Model) view() string {
 	if m.state == stateDetail || (m.state == stateCompose && m.prevState == stateDetail) {
 		base := m.renderDetailFull()
 		if m.state == stateCompose {
@@ -145,9 +154,6 @@ func (m *Model) renderPostMeta(post api.Post) string {
 	if post.ReplyCount > 0 {
 		parts = append(parts, metaStyle.Render(fmt.Sprintf("✦ %d", post.ReplyCount)))
 	}
-	if n := len(post.Embed.EmbedImages()); n > 0 {
-		parts = append(parts, metaStyle.Render(fmt.Sprintf("🖼 %d", n)))
-	}
 	if m.isBookmarked(post.URI) {
 		parts = append(parts, bookmarkedStyle.Render("★"))
 	}
@@ -157,16 +163,14 @@ func (m *Model) renderPostMeta(post api.Post) string {
 	return strings.Join(parts, metaStyle.Render("  "))
 }
 
-// Size of the list-view thumbnail, in terminal cells. Small enough that a post
-// with an image stays about as tall as one without, so the feed keeps its rhythm.
-const (
-	thumbCols = 16
-	thumbRows = 4
-)
+// thumbRows is the height, in terminal rows, of the image preview under a post
+// in the list view. Small enough that a post with a picture still leaves room
+// for its neighbours on screen.
+const thumbRows = 5
 
 // thumbURL returns the URL to show for a post's first embedded image in the
 // list view: the server-side thumbnail, which is far smaller than the full
-// image and all a 16x4 cell block can resolve anyway.
+// image and more than a few-rows-tall preview can resolve anyway.
 func thumbURL(post api.Post) string {
 	imgs := post.Embed.EmbedImages()
 	if len(imgs) == 0 {
@@ -191,29 +195,63 @@ func detailImageURL(post api.Post) string {
 	return imgs[0].Thumb
 }
 
-// renderThumb renders a post's first embedded image as a thumbnail occupying
-// exactly thumbCols x thumbRows cells, or "" when the post has no image. The
-// cells are reserved while the image is still downloading (and kept blank if it
-// fails) so the surrounding text does not reflow when it arrives.
-func (m *Model) renderThumb(post api.Post) string {
+// thumbID derives a Kitty image id from a thumbnail's URL, so that repainting
+// the same picture replaces its placement instead of stacking another copy on
+// top of it.
+func thumbID(url string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(url))
+	id := h.Sum32()
+	if id <= kittyImageID {
+		id += kittyImageID + 1 // stay clear of the detail view's fixed id
+	}
+	return id
+}
+
+// renderThumb renders a post's first embedded image as a thumbnail block of
+// exactly thumbRows rows, or "" when the post has no image. The rows are
+// reserved while the image is still downloading (and stay blank if it failed)
+// so the feed does not reflow when it arrives.
+func (m *Model) renderThumb(post api.Post, width int) string {
 	url := thumbURL(post)
 	if url == "" {
 		return ""
 	}
-	box := lipgloss.NewStyle().Width(thumbCols).MarginRight(1)
 	img, ok := m.imageCache[url]
 	if !ok {
-		return box.Render(strings.Repeat("\n", thumbRows-1))
+		return strings.Repeat("\n", thumbRows-1)
 	}
-	s, ok := m.thumbCache[url]
+	id := thumbID(url)
+	if !supportsSixel() && supportsKitty() {
+		if m.frameThumbs == nil {
+			m.frameThumbs = make(map[uint32]bool)
+		}
+		m.frameThumbs[id] = true
+	}
+	// Keyed by width too: the profile overlay renders the same post narrower.
+	key := fmt.Sprintf("%s|%d", url, width)
+	s, ok := m.thumbCache[key]
 	if !ok {
-		// Half-blocks only: Kitty and Sixel position pixels by cursor movement,
-		// which lipgloss cannot account for when it lays the block out inside a
-		// bordered box. Only the detail view, which owns the whole screen, uses them.
-		s = renderImageBlockView(img, thumbCols, thumbRows)
-		m.thumbCache[url] = s
+		s = renderThumbBlock(img, width, thumbRows, id)
+		m.thumbCache[key] = s
 	}
-	return box.Render(s)
+	return s
+}
+
+// reapThumbs deletes the Kitty placements of the thumbnails that were on the
+// previous frame but are not on this one. Kitty images outlive the text they
+// were drawn over, so a post scrolling away would otherwise leave its picture
+// behind on top of whatever took its place. Sixel needs none of this: its
+// pixels belong to the cells, and repainting them clears the image.
+func (m *Model) reapThumbs() string {
+	var sb strings.Builder
+	for id := range m.shownThumbs {
+		if !m.frameThumbs[id] {
+			sb.WriteString(deleteKittyImage(id))
+		}
+	}
+	m.shownThumbs = m.frameThumbs
+	return sb.String()
 }
 
 // renderFeedItem renders a single feed item as a styled post box of the given
@@ -226,31 +264,27 @@ func (m *Model) renderFeedItem(item api.FeedItem, selected bool, width int) stri
 		boxSt = selectedPostStyle
 	}
 
-	post := item.Post
-	thumb := m.renderThumb(post)
-
 	inner := width - 2 // horizontal padding (2); the left border sits outside Width
-	if thumb != "" {
-		inner -= thumbCols + 1 // thumbnail column plus its gutter
-	}
 	if inner < 20 {
 		inner = 20
 	}
 
+	post := item.Post
 	parts := []string{
 		renderPostHeader(post, inner, nameSt, handleSt),
 		renderTextWithLinks(post.Record, inner, textSt),
+	}
+	// The thumbnail goes under the text rather than beside it: a picture column
+	// would indent the name and the text of image posts only, and the feed reads
+	// as one column.
+	if thumb := m.renderThumb(post, inner); thumb != "" {
+		parts = append(parts, thumb)
 	}
 	if meta := m.renderPostMeta(post); meta != "" {
 		parts = append(parts, meta)
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	if thumb != "" {
-		content = lipgloss.JoinHorizontal(lipgloss.Top, thumb, content)
-	}
-
-	return boxSt.Width(width).Render(content)
+	return boxSt.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
 }
 
 // fillFeedToHeight renders feed items around cur, expanding to fill height lines.

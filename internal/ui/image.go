@@ -164,14 +164,8 @@ func renderImageSixelView(src image.Image, maxCols, availableRows int) string {
 		return ""
 	}
 	cols, rows := imageDims(src, maxCols, sixelRows)
-	pixW := cols * 8
-	pixH := rows * 16
-	dst := image.NewRGBA(image.Rect(0, 0, pixW, pixH))
-	draw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
-
-	var buf bytes.Buffer
-	enc := sixel.NewEncoder(&buf)
-	if err := enc.Encode(dst); err != nil {
+	data := sixelImage(src, cols, rows)
+	if data == "" {
 		return ""
 	}
 
@@ -180,7 +174,21 @@ func renderImageSixelView(src image.Image, maxCols, availableRows int) string {
 	// sixelData          → pixels drawn; cursor ends rows below start ✓
 	placeholder := strings.Repeat("\n", sixelRows)
 	cursorUp := fmt.Sprintf("\033[%dA", rows)
-	return placeholder + cursorUp + buf.String()
+	return placeholder + cursorUp + data
+}
+
+// sixelImage encodes src, scaled to a cols x rows box of terminal cells, as a
+// Sixel DCS sequence that draws at the cursor and leaves it rows lines lower.
+// Returns "" when the image cannot be encoded.
+func sixelImage(src image.Image, cols, rows int) string {
+	dst := image.NewRGBA(image.Rect(0, 0, cols*8, rows*16))
+	draw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
+
+	var buf bytes.Buffer
+	if err := sixel.NewEncoder(&buf).Encode(dst); err != nil {
+		return ""
+	}
+	return buf.String()
 }
 
 // renderImageKittyView builds the Kitty graphics image string, using the same
@@ -199,7 +207,26 @@ func renderImageKittyView(src image.Image, maxCols, availableRows int) string {
 		return ""
 	}
 	cols, rows := imageDims(src, maxCols, kittyRows)
+	data := kittyImage(src, cols, rows, kittyImageID)
+	if data == "" {
+		return ""
+	}
 
+	var sb strings.Builder
+	sb.WriteString(strings.Repeat("\n", kittyRows))
+	fmt.Fprintf(&sb, "\033[%dA", rows)
+	sb.WriteString(data)
+	fmt.Fprintf(&sb, "\033[%dB", rows)
+	return sb.String()
+}
+
+// kittyImage encodes src, scaled to a cols x rows box of terminal cells, as the
+// Kitty APC chunks that draw it at the cursor without moving the cursor (C=1).
+// Returns "" when the image cannot be encoded.
+//
+// id identifies the image and its placement, so that redrawing the same image
+// replaces its placement instead of stacking a second copy on top of it.
+func kittyImage(src image.Image, cols, rows int, id uint32) string {
 	// Downscale before encoding: source images run to several megapixels and this
 	// re-encodes on every repaint. The terminal scales the result into the c×r cell box.
 	dst := image.NewRGBA(image.Rect(0, 0, cols*8, rows*16))
@@ -212,8 +239,6 @@ func renderImageKittyView(src image.Image, maxCols, availableRows int) string {
 	payload := base64.StdEncoding.EncodeToString(buf.Bytes())
 
 	var sb strings.Builder
-	sb.WriteString(strings.Repeat("\n", kittyRows))
-	fmt.Fprintf(&sb, "\033[%dA", rows)
 	for first := true; len(payload) > 0; first = false {
 		chunk := payload
 		if len(chunk) > kittyChunkBytes {
@@ -227,13 +252,66 @@ func renderImageKittyView(src image.Image, maxCols, availableRows int) string {
 		if first {
 			// a=T transmits and displays in one command, f=100 is PNG.
 			fmt.Fprintf(&sb, "\033_Ga=T,f=100,i=%d,p=%d,c=%d,r=%d,C=1,q=2,m=%d;%s\033\\",
-				kittyImageID, kittyPlacementID, cols, rows, more, chunk)
+				id, kittyPlacementID, cols, rows, more, chunk)
 		} else {
 			// Continuation chunks carry only m; the terminal remembers the rest.
 			fmt.Fprintf(&sb, "\033_Gm=%d;%s\033\\", more, chunk)
 		}
 	}
-	fmt.Fprintf(&sb, "\033[%dB", rows)
+	return sb.String()
+}
+
+// deleteKittyImage removes an image and its placement from the terminal.
+func deleteKittyImage(id uint32) string {
+	return fmt.Sprintf("\033_Ga=d,d=I,i=%d,q=2\033\\", id)
+}
+
+// renderThumbBlock renders src as a block of exactly blockRows terminal rows,
+// for embedding inside a lipgloss box.
+//
+// With Sixel or Kitty the pixels are drawn by an escape sequence that lipgloss
+// measures as zero-width, so it must not disturb the line it sits on. The block
+// is therefore (blockRows-1) blank lines — which lipgloss pads and the terminal
+// paints normally — followed by one line holding only the escape sequence:
+//
+//	cursor-up (blockRows-1)   ← to the top of the blank area
+//	<pixels>                  ← drawn there, cursor ends rows lower
+//	cursor-down (remainder)   ← back to the line the sequence started on
+//
+// Drawing last means the blank lines cannot erase the pixels, and returning the
+// cursor to its own line keeps the padding lipgloss appends harmless.
+//
+// Without pixel support the block is half-block characters, which need no tricks.
+func renderThumbBlock(src image.Image, maxCols, blockRows int, id uint32) string {
+	if blockRows < 2 {
+		return renderImageBlockView(src, maxCols, blockRows)
+	}
+	avail := blockRows - 1
+	cols, rows := imageDims(src, maxCols, avail)
+
+	var data string
+	switch {
+	case supportsSixel():
+		data = sixelImage(src, cols, rows)
+	case supportsKitty():
+		data = kittyImage(src, cols, rows, id)
+		if data != "" {
+			// C=1 left the cursor untouched; move it to where the pixels ended so
+			// both protocols leave it in the same place.
+			data += fmt.Sprintf("\033[%dB", rows)
+		}
+	}
+	if data == "" {
+		return renderImageBlockView(src, maxCols, blockRows)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(strings.Repeat("\n", avail))
+	fmt.Fprintf(&sb, "\033[%dA", avail)
+	sb.WriteString(data)
+	if back := avail - rows; back > 0 {
+		fmt.Fprintf(&sb, "\033[%dB", back)
+	}
 	return sb.String()
 }
 

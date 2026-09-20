@@ -160,6 +160,8 @@ func TestRenderImageKittyView_ChunksPayload(t *testing.T) {
 // A feed item must keep the same geometry whether its thumbnail has arrived or
 // not, so the list does not reflow when a download finishes.
 func TestRenderFeedItem_ThumbnailGeometryIsStable(t *testing.T) {
+	t.Setenv("BSKY_SIXEL", "0")
+	t.Setenv("BSKY_KITTY", "0")
 	m := newTestModel()
 	const url = "https://cdn.example/thumb.jpg"
 	item := api.FeedItem{Post: api.Post{
@@ -183,5 +185,33 @@ func TestRenderFeedItem_ThumbnailGeometryIsStable(t *testing.T) {
 	// The thumbnail must actually be drawn: block pixels carry 24-bit colour.
 	if !strings.Contains(loaded, "\x1b[48;2;") {
 		t.Error("loaded item has no block pixels")
+	}
+}
+
+// The Sixel thumbnail draws its pixels on the last line of the block and must
+// leave the cursor on that same line, or every post below it shifts.
+func TestRenderThumbBlock_SixelRowAccounting(t *testing.T) {
+	t.Setenv("BSKY_SIXEL", "1")
+	const blockRows = 5
+	out := renderThumbBlock(testImage(400, 200), 40, blockRows, 99)
+
+	if got := strings.Count(out, "\n"); got != blockRows-1 {
+		t.Errorf("block spans %d newlines, want %d", got, blockRows-1)
+	}
+	if !strings.Contains(out, "\x1bP") {
+		t.Fatal("no Sixel data in block")
+	}
+	if lipgloss.Width(out) != 0 {
+		t.Errorf("block last line measures %d cells wide, want 0", lipgloss.Width(out))
+	}
+	// cursor-up to the top of the block, pixels, then back down to the last line.
+	cols, rows := imageDims(testImage(400, 200), 40, blockRows-1)
+	_ = cols
+	wantUp := fmt.Sprintf("\x1b[%dA", blockRows-1)
+	if !strings.Contains(out, wantUp) {
+		t.Errorf("missing cursor-up %q", wantUp)
+	}
+	if back := blockRows - 1 - rows; back > 0 && !strings.Contains(out, fmt.Sprintf("\x1b[%dB", back)) {
+		t.Errorf("missing cursor-down %d", back)
 	}
 }
