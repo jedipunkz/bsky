@@ -8,7 +8,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/eliukblau/pixterm v1.3.3
-	github.com/mattn/go-sixel v0.0.12
+	github.com/mattn/go-sixel v0.0.14
 	golang.org/x/image v0.46.0
 	golang.org/x/term v0.46.0
 	gopkg.in/yaml.v3 v3.0.1
