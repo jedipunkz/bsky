@@ -8,11 +8,16 @@ updates:
     commit-message:
       prefix: chore
     groups:
+      go-version:
+        patterns:
+          - "go"
       # Minor and patch bumps ride in a single PR; majors get their own so a
       # broken one can be reverted on its own.
       go-dependencies:
         patterns:
           - "*"
+        exclude-patterns:
+          - "go"
         update-types:
           - minor
           - patch
